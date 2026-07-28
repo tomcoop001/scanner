@@ -127,7 +127,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v6</p>
+      <p class="catline">Charley Family Shop 'n Save · v7</p>
     </div>
   </div>
 
@@ -144,6 +144,7 @@
     <p class="catline"><span id="catline">Item list not downloaded yet</span>
       <button class="linklike" onclick="refreshCatalog(true)">Update item list</button></p>
     <p class="catline" id="syncline"></p>
+    <p class="catline" id="countline"></p>
   </div>
 
   <!-- SCANNER -->
@@ -157,6 +158,7 @@
       </div>
     </div>
     <p class="hint" id="scanhint">Point the camera at the barcode</p>
+    <button class="bigbtn cancel" id="torchBtn" style="display:none;font-size:16px;padding:12px" onclick="toggleTorch()">&#128294; Flashlight</button>
     <button class="bigbtn cancel" onclick="stopScan(true)">Done</button>
   </div>
   <input type="file" id="photoIn" accept="image/*" capture="environment" style="display:none" onchange="photoPicked(this)">
@@ -331,6 +333,11 @@ function persistQueue() {
 function enqueue(job) {
   job.auth = AUTH;                 // records belong to whoever was logged in when scanned
   job.when = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  if (job.action === 'save') {
+    // unique id per scan — if a dropped connection makes this retry, the
+    // server recognizes the id and never records the same scan twice
+    job.data.cid = 'C' + Date.now() + Math.floor(Math.random() * 100000);
+  }
   QUEUE.push(job);
   persistQueue();
   updateSyncChip();
@@ -398,8 +405,10 @@ function showSyncPanel() {
     h += '<p style="margin:0 0 6px;font-size:15px;font-weight:bold;color:#c82018">Rejected saves:</p>';
     FAILED.forEach(function (j) {
       var d = j.data || {};
+      var who = j.auth ? (storeLabel(j.auth.store) + ' · ' + deptLabel(j.auth.dept)) : 'unknown login';
       h += '<div class="already" style="border-color:#e0b4b4;background:#fdf0f0">' +
-           escp(d.description || d.upc || 'item') + ' (' + escp(j.when || '') + ')<br><b>Reason:</b> ' + escp(j.error || 'unknown') + '</div>';
+           escp(d.description || d.upc || 'item') + ' (' + escp(j.when || '') + ', scanned under ' + escp(who) + ')' +
+           '<br><b>Reason:</b> ' + escp(j.error || 'unknown') + '</div>';
     });
     h += '<button class="bigbtn save" style="font-size:17px;padding:14px" onclick="retryFailed()">Retry these under my current login</button>';
     h += '<button class="bigbtn cancel" style="font-size:15px;padding:12px" onclick="discardFailed()">Remove them (they will NOT be recorded)</button>';
@@ -445,9 +454,10 @@ function api(action, data, authOverride) {
     return r.json();
   }).then(function (res) {
     if (!res.ok) {
-      // the server answered and said no — this is a real rejection, not a bad connection
       var e = new Error(res.error || 'Something went wrong');
-      e.permanent = true;
+      // the server marks which rejections are final; anything it doesn't
+      // mark (momentary Google hiccups, busy moments) gets retried
+      e.permanent = (res.permanent === true);
       throw e;
     }
     return res.result;
@@ -613,6 +623,12 @@ window.onload = function () {
     sel.appendChild(o);
   });
 
+  // calendar sanity rails: no fat-fingering last year or a decade out
+  var ed = $('expDate');
+  ed.min = iso(todayPlus(-60));
+  ed.max = iso(todayPlus(1095));
+  updateCountLine();
+
   loadApi();
   loadCatalog();
   loadQueue();
@@ -657,22 +673,59 @@ function FORMATS() {
     Html5QrcodeSupportedFormats.CODE_128
   ];
 }
+/* short confirmation beep (works in noisy aisles where vibrate is missed) */
+var audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = 1800; g.gain.value = 0.15;
+    o.start(); o.stop(audioCtx.currentTime + 0.08);
+  } catch (e) {}
+}
+
+var lastSavedUpc = '', lastSavedAt = 0, dupToastAt = 0;
+var torchOn = false;
+function toggleTorch() {
+  if (!scanner) return;
+  torchOn = !torchOn;
+  scanner.applyVideoConstraints({ advanced: [{ torch: torchOn }] }).catch(function () {
+    torchOn = false;
+    toast('Flashlight not supported on this device', true);
+  });
+}
+
 function startScan() {
   show('view-scan');
   $('photoFallback').style.display = 'none';
   $('reader').style.display = 'block';
   $('scanhint').style.display = 'block';
+  torchOn = false;
   scanner = new Html5Qrcode('reader');
   var config = { fps: 10, qrbox: { width: 300, height: 160 }, formatsToSupport: FORMATS() };
   scanner.start({ facingMode: 'environment' }, config,
     function (text) {
+      // guard: right after saving an item, the camera reopens still pointed
+      // at the same shelf — don't ring up the same barcode twice by accident
+      var now = Date.now();
+      if (normUpc(text) === lastSavedUpc && (now - lastSavedAt) < 8000) {
+        if (now - dupToastAt > 1600) {
+          dupToastAt = now;
+          toast('That one\'s saved — move to the next item.');
+        }
+        return;   // keep scanning
+      }
+      beep();
       if (navigator.vibrate) navigator.vibrate(120);
       stopScan(false);
       lastEntry = 'camera';
       lookup(text);
     },
     function () { /* no match in this frame — keep scanning */ }
-  ).catch(function (err) {
+  ).then(function () {
+    $('torchBtn').style.display = 'block';   // camera is live — offer the light
+  }).catch(function (err) {
     scanner = null;
     $('reader').style.display = 'none';
     $('scanhint').style.display = 'none';
@@ -689,6 +742,7 @@ function photoPicked(inp) {
   fr.scanFileV2(file, false).then(function (res) {
     busy(false);
     try { fr.clear(); } catch (e) {}
+    beep();
     if (navigator.vibrate) navigator.vibrate(120);
     lastEntry = 'camera';
     lookup(res.decodedText);
@@ -699,6 +753,7 @@ function photoPicked(inp) {
   });
 }
 function stopScan(goBack) {
+  $('torchBtn').style.display = 'none';
   if (scanner) {
     scanner.stop().then(function () { scanner.clear(); }).catch(function () {});
     scanner = null;
@@ -783,6 +838,7 @@ function renderRecords(records) {
 }
 
 function resetDate() {
+  savedAtGuard = 0;   // fresh item — the double-tap guard only applies within one item
   $('expDate').value = '';
   $('daysSel').value = '';
   $('datesum').textContent = '';
@@ -815,12 +871,14 @@ function daysPicked() {
 }
 
 /* ================= save (instant — syncs in the background) ============ */
+var savedAtGuard = 0;
 function save() {
+  if (Date.now() - savedAtGuard < 800) return;   // ignore accidental double-taps
   if (AUTH && AUTH.store === ALL) {
     toast("You're logged in as All Stores — tap Switch and log in under one store to save items.", true);
     return;
   }
-  if (!$('expDate').value) { toast('Pick the shelf life or expiration date first', true); return; }
+  if (!$('expDate').value) { toast('Pick the expiration date first', true); return; }
   var isNew = $('newItem').style.display !== 'none';
   var pickedDept;
   if (isNew) pickedDept = $('niDept').value;
@@ -852,13 +910,39 @@ function save() {
   }
 
   // 2. queue the record for background sync — no waiting
+  savedAtGuard = Date.now();
+  lastSavedUpc = normUpc(payload.upc);
+  lastSavedAt = savedAtGuard;
   enqueue({ action: 'save', data: payload });
+  bumpCount();
 
   // 3. confirm and go straight to the next scan
   var p = payload.expDate.split('-');
   var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
   toast('Saved: ' + (payload.description || 'item') + ' — expires ' + pretty(d));
   nextAfterItem();
+}
+
+/* today's scan count for this device — a little "you're getting it done" */
+function bumpCount() {
+  var today = iso(todayPlus(0)), c = { date: today, n: 0 };
+  try {
+    var raw = localStorage.getItem('slt_count');
+    if (raw) { var o = JSON.parse(raw); if (o.date === today) c = o; }
+  } catch (e) {}
+  c.n++;
+  try { localStorage.setItem('slt_count', JSON.stringify(c)); } catch (e) {}
+  updateCountLine();
+}
+function updateCountLine() {
+  var el = $('countline');
+  if (!el) return;
+  var n = 0;
+  try {
+    var raw = localStorage.getItem('slt_count');
+    if (raw) { var o = JSON.parse(raw); if (o.date === iso(todayPlus(0))) n = o.n; }
+  } catch (e) {}
+  el.textContent = n ? (n + ' item' + (n === 1 ? '' : 's') + ' scanned today on this device') : '';
 }
 
 function goHome() { show('view-home'); }
@@ -869,10 +953,10 @@ function openExpiring() {
   api('expiring').then(function (groups) {
     busy(false);
     var el = $('expList');
+    var h = '<button class="bigbtn expbtn" style="font-size:16px;padding:12px;margin:0 0 4px" onclick="openExpiring()">&#8635; Refresh list</button>';
     if (!groups || groups.length === 0) {
-      el.innerHTML = '<div class="empty">&#127881; Nothing close to expiring right now.</div>';
+      h += '<div class="empty">&#127881; Nothing close to expiring right now.</div>';
     } else {
-      var h = '';
       groups.forEach(function (g) {
         h += '<div class="grp"><h3>' + escp(g.label) + ' (' + g.items.length + ')</h3>';
         g.items.forEach(function (it) {
@@ -882,8 +966,9 @@ function openExpiring() {
           else if (it.daysLeft <= 1) badge = '<span class="badge b-org">1 day</span>';
           else badge = '<span class="badge b-org">' + it.daysLeft + ' days</span>';
           if (it.status === 'Marked Down') badge += ' <span class="badge b-blu">Marked Down</span>';
-          h += '<div class="exprow"><div class="d">' + escp(it.description) + '</div>' +
-               '<div class="m">UPC ' + escp(it.upc) + ' &middot; expires ' + it.expDate + ' &nbsp;' + badge + '</div>' +
+          h += '<div class="exprow" id="exprow-' + escp(it.id) + '"><div class="d">' + escp(it.description) + '</div>' +
+               '<div class="m">UPC ' + escp(it.upc) + ' &middot; expires ' + it.expDate +
+               ' &nbsp;<span id="expbadge-' + escp(it.id) + '">' + badge + '</span></div>' +
                '<div class="rowbtns">' +
                '<button class="mk" onclick="setStatus(\'' + it.id + '\',\'Marked Down\')">&#128178; Marked Down</button>' +
                '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Pulled\')">&#128465; Pulled</button>' +
@@ -891,18 +976,26 @@ function openExpiring() {
         });
         h += '</div>';
       });
-      el.innerHTML = h;
     }
+    el.innerHTML = h;
     show('view-exp');
   }).catch(fail);
 }
+/* instant on screen; the sheet update syncs in the background like saves do */
 function setStatus(id, status) {
-  busy(true);
-  api('status', { id: id, status: status }).then(function () {
-    busy(false);
-    toast(status === 'Pulled' ? 'Item pulled off the list' : 'Marked down ✓');
-    openExpiring();
-  }).catch(fail);
+  var row = $('exprow-' + id);
+  if (row) {
+    if (status === 'Pulled') {
+      row.parentNode.removeChild(row);
+    } else {
+      var b = $('expbadge-' + id);
+      if (b && b.innerHTML.indexOf('Marked Down') < 0) {
+        b.innerHTML += ' <span class="badge b-blu">Marked Down</span>';
+      }
+    }
+  }
+  enqueue({ action: 'status', data: { id: id, status: status } });
+  toast(status === 'Pulled' ? 'Item pulled off the list' : 'Marked down ✓');
 }
 </script>
 </body>
