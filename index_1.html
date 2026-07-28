@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<!-- SHELF LIFE TRACKER — standalone scanner page.
+     Host this file on any free static host (e.g. GitHub Pages).
+     On first open it asks for your Apps Script Web app URL (the /exec link),
+     then remembers it. Full live-camera scanning works here because this
+     page is NOT inside Google's wrapper. -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Shelf Life Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #f4f6f8; color: #222; }
+  header { background: #b30000; color: #fff; padding: 14px 16px; font-size: 20px; font-weight: bold;
+           display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  header .sub { font-size: 13px; font-weight: normal; opacity: .95; text-align: right; }
+  header .switch { font-size: 12px; font-weight: normal; background: rgba(255,255,255,.2); border: none;
+                   color: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; display: none; }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 16px; }
+  .view { display: none; }
+  .view.on { display: block; }
+
+  .bigbtn { display: block; width: 100%; padding: 22px; margin: 12px 0; font-size: 22px; font-weight: bold;
+            border: none; border-radius: 14px; cursor: pointer; }
+  .scanbtn { background: #b30000; color: #fff; }
+  .expbtn { background: #fff; color: #b30000; border: 3px solid #b30000; }
+
+  .card { background: #fff; border-radius: 14px; padding: 18px; margin: 12px 0;
+          box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+  .desc { font-size: 22px; font-weight: bold; margin: 0 0 4px; }
+  .dept { display: inline-block; background: #eef; color: #334; border-radius: 8px;
+          padding: 4px 10px; font-size: 14px; margin-bottom: 8px; }
+  .upcline { color: #777; font-size: 14px; margin-bottom: 10px; }
+  label { display: block; font-size: 15px; font-weight: bold; margin: 14px 0 6px; }
+  input[type=text], input[type=date], input[type=tel], input[type=password], input[type=url], select {
+    width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 10px; background: #fff; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chip { padding: 12px 16px; font-size: 17px; border: 2px solid #b30000; color: #b30000;
+          background: #fff; border-radius: 999px; cursor: pointer; font-weight: bold; }
+  .chip.sel { background: #b30000; color: #fff; }
+  .datesum { font-size: 17px; margin-top: 10px; color: #333; }
+  .datesum b { color: #b30000; }
+
+  .save { background: #1a7f37; color: #fff; }
+  .cancel { background: #e4e7eb; color: #333; font-size: 18px; padding: 16px; }
+
+  .already { background: #fff8e6; border: 1px solid #eedc9a; border-radius: 10px;
+             padding: 10px 12px; font-size: 15px; margin-bottom: 6px; }
+
+  #reader { width: 100%; border-radius: 14px; overflow: hidden; background: #000; min-height: 300px; }
+  .hint { text-align: center; color: #666; font-size: 15px; margin-top: 10px; }
+
+  .grp h3 { background: #333; color: #fff; padding: 10px 14px; border-radius: 10px; margin: 18px 0 8px; font-size: 18px; }
+  .exprow { background: #fff; border-radius: 12px; padding: 12px 14px; margin: 8px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .exprow .d { font-size: 17px; font-weight: bold; }
+  .exprow .m { font-size: 14px; color: #666; margin: 3px 0 8px; }
+  .badge { display: inline-block; border-radius: 8px; padding: 3px 9px; font-size: 13px; font-weight: bold; color: #fff; }
+  .b-red { background: #b30000; } .b-org { background: #d97706; } .b-grn { background: #1a7f37; } .b-blu { background: #2557a7; }
+  .rowbtns { display: flex; gap: 8px; }
+  .rowbtns button { flex: 1; padding: 12px; font-size: 16px; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; }
+  .mk { background: #ffd60a; color: #333; } .pl { background: #e4e7eb; color: #333; }
+
+  .loginlogo { text-align: center; font-size: 40px; margin: 20px 0 0; }
+  .loginnote { text-align: center; color: #666; font-size: 14px; margin-top: 10px; }
+  .linklike { background: none; border: none; color: #2557a7; text-decoration: underline; font-size: 14px; cursor: pointer; padding: 6px; }
+
+  #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.7);
+             z-index: 50; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: #b30000; }
+  #toast { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 30px;
+           background: #1a7f37; color: #fff; padding: 14px 22px; border-radius: 12px; font-size: 17px;
+           z-index: 60; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-width: 90%; text-align: center; }
+  .empty { text-align: center; color: #666; padding: 30px 10px; font-size: 17px; }
+</style>
+</head>
+<body>
+<header>
+  <span>Shelf Life Tracker</span>
+  <span style="display:flex;align-items:center;gap:8px">
+    <span class="sub" id="hdrsub">Shop 'n Save</span>
+    <button class="switch" id="switchbtn" onclick="logout()">Switch</button>
+  </span>
+</header>
+
+<div class="wrap">
+
+  <!-- ONE-TIME CONNECT -->
+  <div id="view-connect" class="view">
+    <div class="loginlogo">&#128279;</div>
+    <div class="card">
+      <p style="font-size:16px;margin:0 0 4px"><b>One-time setup for this device.</b></p>
+      <p style="font-size:15px;color:#555;margin:0">Paste your tracker's app link — the long Google address
+      ending in <b>/exec</b> from your Deploy screen.</p>
+      <label for="apiUrl">App link</label>
+      <input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
+      <button class="bigbtn scanbtn" onclick="doConnect()">CONNECT</button>
+    </div>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="view-login" class="view">
+    <div class="loginlogo">&#128274;</div>
+    <div class="card">
+      <label for="lgStore">Your store</label>
+      <select id="lgStore"></select>
+      <label for="lgDept">Your department</label>
+      <select id="lgDept"></select>
+      <label for="lgPin">Department PIN</label>
+      <input type="password" id="lgPin" inputmode="numeric" placeholder="4-digit PIN"
+             onkeydown="if(event.key==='Enter'){doLogin()}">
+      <button class="bigbtn scanbtn" onclick="doLogin()">LOG IN</button>
+      <p class="loginnote">You only see and change your own store's, your own department's items.<br>
+      PINs are in the Settings tab of the tracker sheet — ask the boss.</p>
+      <p style="text-align:center;margin:4px 0 0">
+        <button class="linklike" onclick="changeApi()">Change app link</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- HOME -->
+  <div id="view-home" class="view">
+    <button class="bigbtn scanbtn" onclick="startScan()">&#128247; &nbsp;SCAN ITEM</button>
+    <div class="card">
+      <label for="manual">Or type / scan-gun a UPC:</label>
+      <input type="tel" id="manual" placeholder="UPC number" inputmode="numeric"
+             onkeydown="if(event.key==='Enter'){manualGo()}">
+      <button class="bigbtn expbtn" style="font-size:18px;padding:14px;margin-bottom:0" onclick="manualGo()">Look Up</button>
+    </div>
+    <button class="bigbtn expbtn" onclick="openExpiring()">&#9200; &nbsp;EXPIRING ITEMS</button>
+  </div>
+
+  <!-- SCANNER -->
+  <div id="view-scan" class="view">
+    <div id="reader"></div>
+    <div id="photoFallback" style="display:none">
+      <div class="card" style="text-align:center">
+        <p style="font-size:16px;color:#444;margin:0 0 10px">Live camera is blocked on this device &mdash; no problem.
+        Take a quick photo of the barcode instead:</p>
+        <button class="bigbtn scanbtn" style="margin:0" onclick="snapPhoto()">&#128248; SNAP A PHOTO OF THE BARCODE</button>
+      </div>
+    </div>
+    <p class="hint" id="scanhint">Point the camera at the barcode</p>
+    <button class="bigbtn cancel" onclick="stopScan(true)">Cancel</button>
+  </div>
+  <input type="file" id="photoIn" accept="image/*" capture="environment" style="display:none" onchange="photoPicked(this)">
+
+  <!-- ITEM / DATE ENTRY -->
+  <div id="view-item" class="view">
+    <div class="card">
+      <div id="knownItem">
+        <p class="desc" id="itDesc"></p>
+        <span class="dept" id="itDept"></span>
+        <div class="upcline">UPC: <span id="itUpc"></span></div>
+        <div id="kiDeptWrap" style="display:none">
+          <label for="kiDept">Which department is this?</label>
+          <select id="kiDept"></select>
+        </div>
+        <div id="itRecords"></div>
+      </div>
+      <div id="newItem" style="display:none">
+        <p class="desc" style="color:#b30000">Item not on file</p>
+        <div class="upcline">UPC: <span id="niUpc"></span></div>
+        <label for="niDept">Department</label>
+        <select id="niDept"></select>
+        <label for="niDesc">Brief description</label>
+        <input type="text" id="niDesc" placeholder="e.g. 80/20 Ground Beef 1lb">
+      </div>
+
+      <label>Shelf life — tap days left, or pick the date on the package</label>
+      <div class="chips" id="chips"></div>
+      <input type="date" id="expDate" style="margin-top:10px" onchange="dateTyped()">
+      <div class="datesum" id="datesum"></div>
+
+      <button class="bigbtn save" onclick="save()">&#10003; &nbsp;SAVE</button>
+      <button class="bigbtn cancel" onclick="goHome()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- EXPIRING LIST -->
+  <div id="view-exp" class="view">
+    <div id="expList"></div>
+    <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Back</button>
+  </div>
+
+</div>
+
+<div id="overlay">Working&hellip;</div>
+<div id="toast"></div>
+
+<script>
+var API_URL = null;       // your Apps Script /exec link (saved on this device)
+var AUTH = null;          // {store, dept, pin} for the logged-in user
+var stores = [];
+var departments = [];
+var current = null;       // item currently being saved
+var scanner = null;
+var CHIP_DAYS = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30];
+var ALL = 'ALL';
+
+/* ---------- talk to the Google Sheet backend ---------- */
+function api(action, data) {
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: action, data: data || {}, auth: AUTH })
+  }).then(function (r) {
+    if (!r.ok) throw new Error('Connection problem (HTTP ' + r.status + ')');
+    return r.json();
+  }).then(function (res) {
+    if (!res.ok) throw new Error(res.error || 'Something went wrong');
+    return res.result;
+  });
+}
+
+/* ---------- helpers ---------- */
+function $(id) { return document.getElementById(id); }
+function show(id) {
+  ['view-connect', 'view-login', 'view-home', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+    $(v).className = (v === id) ? 'view on' : 'view';
+  });
+}
+function busy(on) { $('overlay').style.display = on ? 'flex' : 'none'; }
+function toast(msg, bad) {
+  var t = $('toast');
+  t.textContent = msg;
+  t.style.background = bad ? '#b30000' : '#1a7f37';
+  t.style.display = 'block';
+  setTimeout(function () { t.style.display = 'none'; }, 2800);
+}
+function fail(err) {
+  busy(false);
+  var msg = (err && err.message ? err.message : String(err));
+  toast(msg, true);
+  if (msg.indexOf('log in') >= 0 || msg.indexOf('Log in') >= 0 || msg.indexOf('PIN') >= 0) {
+    clearAuth(); showLogin();
+  }
+}
+function todayPlus(n) {
+  var d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + n);
+  return d;
+}
+function iso(d) {
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function pretty(d) {
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function escp(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ---------- one-time connect ---------- */
+function loadApi() {
+  try { API_URL = localStorage.getItem('slt_api') || null; } catch (e) {}
+}
+function doConnect() {
+  var url = $('apiUrl').value.trim();
+  if (url.indexOf('https://') !== 0 || url.indexOf('/exec') < 0) {
+    toast('That doesn\'t look like the app link — it starts with https:// and ends with /exec', true);
+    return;
+  }
+  API_URL = url;
+  busy(true);
+  api('init').then(function (init) {
+    busy(false);
+    try { localStorage.setItem('slt_api', API_URL); } catch (e) {}
+    applyInit(init);
+    showLogin();
+    toast('Connected!');
+  }).catch(function (err) {
+    busy(false);
+    API_URL = null;
+    toast('Could not connect: ' + ((err && err.message) || err), true);
+  });
+}
+function changeApi() {
+  try { localStorage.removeItem('slt_api'); } catch (e) {}
+  API_URL = null;
+  $('apiUrl').value = '';
+  show('view-connect');
+}
+
+/* ---------- login / logout ---------- */
+function loadAuth() {
+  try { var s = localStorage.getItem('slt_auth'); if (s) AUTH = JSON.parse(s); } catch (e) {}
+}
+function saveAuth() {
+  try { localStorage.setItem('slt_auth', JSON.stringify(AUTH)); } catch (e) {}
+}
+function clearAuth() {
+  AUTH = null;
+  try { localStorage.removeItem('slt_auth'); } catch (e) {}
+}
+function deptLabel(d) { return d === ALL ? 'All Departments' : d; }
+function storeLabel(s) { return s === ALL ? 'All Stores' : s; }
+function setHeader() {
+  if (AUTH) {
+    $('hdrsub').textContent = storeLabel(AUTH.store) + ' · ' + deptLabel(AUTH.dept);
+    $('switchbtn').style.display = 'inline-block';
+  } else {
+    $('hdrsub').textContent = "Shop 'n Save";
+    $('switchbtn').style.display = 'none';
+  }
+}
+function showLogin() { setHeader(); show('view-login'); }
+function logout() { stopScan(false); clearAuth(); $('lgPin').value = ''; showLogin(); }
+
+function doLogin() {
+  var attempt = { store: $('lgStore').value, dept: $('lgDept').value, pin: $('lgPin').value.trim() };
+  if (!attempt.pin) { toast('Type your PIN', true); return; }
+  busy(true);
+  AUTH = attempt;
+  api('login').then(function () {
+    busy(false);
+    saveAuth();
+    setHeader();
+    $('lgPin').value = '';
+    prefillDepts();
+    show('view-home');
+  }).catch(function (err) {
+    busy(false);
+    AUTH = null;
+    toast((err && err.message) ? err.message : String(err), true);
+  });
+}
+
+/* Pre-pick the user's own department in the pickers */
+function prefillDepts() {
+  if (AUTH && AUTH.dept !== ALL) $('niDept').value = AUTH.dept;
+}
+
+/* ---------- startup ---------- */
+function applyInit(init) {
+  stores = init.stores;
+  departments = init.departments;
+
+  var st = $('lgStore');
+  st.innerHTML = '';
+  stores.forEach(function (s) {
+    var o = document.createElement('option'); o.value = s; o.textContent = s; st.appendChild(o);
+  });
+  var oa = document.createElement('option'); oa.value = ALL; oa.textContent = 'All Stores (owner)'; st.appendChild(oa);
+
+  var lg = $('lgDept');
+  lg.innerHTML = '';
+  departments.forEach(function (d) {
+    var o = document.createElement('option'); o.value = d; o.textContent = d; lg.appendChild(o);
+  });
+  var ob = document.createElement('option'); ob.value = ALL; ob.textContent = 'All Departments (manager)'; lg.appendChild(ob);
+
+  ['niDept', 'kiDept'].forEach(function (id) {
+    var sel = $(id);
+    sel.innerHTML = '<option value="">-- pick department --</option>';
+    departments.forEach(function (d) {
+      var o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o);
+    });
+  });
+}
+
+window.onload = function () {
+  var c = $('chips');
+  CHIP_DAYS.forEach(function (n) {
+    var b = document.createElement('button');
+    b.className = 'chip'; b.textContent = n + (n === 1 ? ' day' : ' days');
+    b.onclick = function () { pickChip(n, b); };
+    c.appendChild(b);
+  });
+
+  loadApi();
+  if (!API_URL) { show('view-connect'); return; }
+
+  busy(true);
+  api('init').then(function (init) {
+    busy(false);
+    applyInit(init);
+    loadAuth();
+    if (AUTH) {
+      // silently confirm the saved login still works (PIN may have been changed)
+      api('login').then(function () {
+        setHeader(); prefillDepts(); show('view-home');
+      }).catch(function () {
+        clearAuth(); showLogin();
+      });
+    } else {
+      showLogin();
+    }
+  }).catch(function (err) {
+    busy(false);
+    toast('Could not reach the tracker: ' + ((err && err.message) || err), true);
+    show('view-connect');
+  });
+};
+
+/* ---------- scanning ---------- */
+function FORMATS() {
+  return [
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.CODE_128
+  ];
+}
+function startScan() {
+  show('view-scan');
+  $('photoFallback').style.display = 'none';
+  $('reader').style.display = 'block';
+  $('scanhint').style.display = 'block';
+  scanner = new Html5Qrcode('reader');
+  var config = { fps: 10, qrbox: { width: 300, height: 160 }, formatsToSupport: FORMATS() };
+  scanner.start({ facingMode: 'environment' }, config,
+    function (text) {
+      if (navigator.vibrate) navigator.vibrate(120);
+      stopScan(false);
+      lookup(text);
+    },
+    function () { /* no match in this frame — keep scanning */ }
+  ).catch(function (err) {
+    // Live video blocked or unavailable — switch to snap-a-photo mode,
+    // which uses the device's own camera app and works everywhere.
+    scanner = null;
+    $('reader').style.display = 'none';
+    $('scanhint').style.display = 'none';
+    $('photoFallback').style.display = 'block';
+  });
+}
+
+/* Snap-a-photo fallback: opens the phone/tablet's own camera app,
+   then reads the barcode from the photo it takes. */
+function snapPhoto() { $('photoIn').click(); }
+function photoPicked(inp) {
+  if (!inp.files || !inp.files[0]) return;
+  var file = inp.files[0];
+  inp.value = '';
+  busy(true);
+  var fr = new Html5Qrcode('reader', { formatsToSupport: FORMATS(), verbose: false });
+  fr.scanFileV2(file, false).then(function (res) {
+    busy(false);
+    try { fr.clear(); } catch (e) {}
+    if (navigator.vibrate) navigator.vibrate(120);
+    lookup(res.decodedText);
+  }).catch(function () {
+    busy(false);
+    try { fr.clear(); } catch (e) {}
+    toast('Could not read a barcode in that photo. Get closer so the barcode fills the shot, hold steady, and try again.', true);
+  });
+}
+function stopScan(goBack) {
+  if (scanner) {
+    scanner.stop().then(function () { scanner.clear(); }).catch(function () {});
+    scanner = null;
+  }
+  if (goBack) show('view-home');
+}
+
+function manualGo() {
+  var v = $('manual').value.replace(/\D/g, '');
+  if (!v) { toast('Type a UPC number first', true); return; }
+  lookup(v);
+}
+
+/* ---------- lookup & date entry ---------- */
+function lookup(upc) {
+  busy(true);
+  api('lookup', { upc: upc }).then(function (res) {
+    busy(false);
+    $('manual').value = '';
+    current = res;
+    resetDate();
+    if (res.found) {
+      $('knownItem').style.display = 'block';
+      $('newItem').style.display = 'none';
+      $('itDesc').textContent = res.description;
+      $('itDept').textContent = res.department || 'No department yet';
+      $('itUpc').textContent = res.key;
+      var needPick = !res.department && AUTH && AUTH.dept === ALL;
+      $('kiDeptWrap').style.display = needPick ? 'block' : 'none';
+      if (needPick) $('kiDept').value = '';
+      var h = '';
+      res.records.forEach(function (r) {
+        h += '<div class="already">Already being tracked &mdash; expires <b>' + r.expDate +
+             '</b> (' + (r.daysLeft < 0 ? 'EXPIRED' : r.daysLeft + ' day' + (r.daysLeft === 1 ? '' : 's') + ' left') +
+             '). Saving again adds a new batch.</div>';
+      });
+      $('itRecords').innerHTML = h;
+    } else {
+      $('knownItem').style.display = 'none';
+      $('newItem').style.display = 'block';
+      $('niUpc').textContent = res.key || res.scanned;
+      $('niDesc').value = '';
+      $('niDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
+    }
+    show('view-item');
+  }).catch(fail);
+}
+
+function resetDate() {
+  $('expDate').value = '';
+  $('datesum').textContent = '';
+  var chips = document.querySelectorAll('.chip');
+  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
+}
+function pickChip(n, btn) {
+  var chips = document.querySelectorAll('.chip');
+  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
+  btn.className = 'chip sel';
+  var d = todayPlus(n);
+  $('expDate').value = iso(d);
+  $('datesum').innerHTML = 'Expires <b>' + pretty(d) + '</b> (' + n + ' day' + (n === 1 ? '' : 's') + ' from today)';
+}
+function dateTyped() {
+  var v = $('expDate').value;
+  if (!v) return;
+  var chips = document.querySelectorAll('.chip');
+  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
+  var p = v.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  var n = Math.round((d - todayPlus(0)) / 86400000);
+  $('datesum').innerHTML = 'Expires <b>' + pretty(d) + '</b> (' +
+    (n < 0 ? 'already past!' : n + ' day' + (n === 1 ? '' : 's') + ' from today') + ')';
+}
+
+/* ---------- save ---------- */
+function save() {
+  if (!$('expDate').value) { toast('Pick the shelf life or expiration date first', true); return; }
+  var isNew = $('newItem').style.display !== 'none';
+  var pickedDept;
+  if (isNew) pickedDept = $('niDept').value;
+  else if (current.department) pickedDept = current.department;
+  else if (AUTH.dept !== ALL) pickedDept = AUTH.dept;
+  else pickedDept = $('kiDept').value;
+
+  var payload = {
+    upc: current.key || current.scanned,
+    isNew: isNew,
+    description: isNew ? $('niDesc').value.trim() : current.description,
+    department: pickedDept,
+    expDate: $('expDate').value
+  };
+  if (!payload.department) { toast('Pick a department', true); return; }
+  if (isNew && !payload.description) { toast('Type a brief description', true); return; }
+
+  busy(true);
+  api('save', payload).then(function (res) {
+    busy(false);
+    toast('Saved: ' + res.description + ' — expires ' + res.expDate);
+    goHome();
+  }).catch(fail);
+}
+
+function goHome() { show('view-home'); }
+
+/* ---------- expiring list ---------- */
+function openExpiring() {
+  busy(true);
+  api('expiring').then(function (groups) {
+    busy(false);
+    var el = $('expList');
+    if (!groups || groups.length === 0) {
+      el.innerHTML = '<div class="empty">&#127881; Nothing close to expiring right now.</div>';
+    } else {
+      var h = '';
+      groups.forEach(function (g) {
+        h += '<div class="grp"><h3>' + escp(g.label) + ' (' + g.items.length + ')</h3>';
+        g.items.forEach(function (it) {
+          var badge;
+          if (it.daysLeft < 0) badge = '<span class="badge b-red">EXPIRED</span>';
+          else if (it.daysLeft === 0) badge = '<span class="badge b-red">TODAY</span>';
+          else if (it.daysLeft <= 1) badge = '<span class="badge b-org">1 day</span>';
+          else badge = '<span class="badge b-org">' + it.daysLeft + ' days</span>';
+          if (it.status === 'Marked Down') badge += ' <span class="badge b-blu">Marked Down</span>';
+          h += '<div class="exprow"><div class="d">' + escp(it.description) + '</div>' +
+               '<div class="m">UPC ' + escp(it.upc) + ' &middot; expires ' + it.expDate + ' &nbsp;' + badge + '</div>' +
+               '<div class="rowbtns">' +
+               '<button class="mk" onclick="setStatus(\'' + it.id + '\',\'Marked Down\')">&#128178; Marked Down</button>' +
+               '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Pulled\')">&#128465; Pulled</button>' +
+               '</div></div>';
+        });
+        h += '</div>';
+      });
+      el.innerHTML = h;
+    }
+    show('view-exp');
+  }).catch(fail);
+}
+
+function setStatus(id, status) {
+  busy(true);
+  api('status', { id: id, status: status }).then(function () {
+    busy(false);
+    toast(status === 'Pulled' ? 'Item pulled off the list' : 'Marked down ✓');
+    openExpiring();
+  }).catch(fail);
+}
+</script>
+</body>
+</html>
