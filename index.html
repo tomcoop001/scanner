@@ -1,9 +1,8 @@
 <!DOCTYPE html>
-<!-- SHELF LIFE TRACKER — standalone scanner page.
+<!-- SHELF LIFE TRACKER — standalone scanner page (fast edition).
      Host this file on any free static host (e.g. GitHub Pages).
-     On first open it asks for your Apps Script Web app URL (the /exec link),
-     then remembers it. Full live-camera scanning works here because this
-     page is NOT inside Google's wrapper. -->
+     The item list is downloaded to the device once, so scans are instant;
+     saves are queued and synced to the Google Sheet in the background. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -18,6 +17,8 @@
   header .sub { font-size: 13px; font-weight: normal; opacity: .95; text-align: right; }
   header .switch { font-size: 12px; font-weight: normal; background: rgba(255,255,255,.2); border: none;
                    color: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; display: none; }
+  #syncchip { display: none; font-size: 12px; font-weight: bold; background: #fff; color: #b30000;
+              border-radius: 999px; padding: 4px 10px; }
   .wrap { max-width: 560px; margin: 0 auto; padding: 16px; }
   .view { display: none; }
   .view.on { display: block; }
@@ -52,6 +53,8 @@
 
   #reader { width: 100%; border-radius: 14px; overflow: hidden; background: #000; min-height: 300px; }
   .hint { text-align: center; color: #666; font-size: 15px; margin-top: 10px; }
+  .catline { text-align: center; color: #888; font-size: 13px; margin: 4px 0 0; }
+  .linklike { background: none; border: none; color: #2557a7; text-decoration: underline; font-size: 13px; cursor: pointer; padding: 4px; }
 
   .grp h3 { background: #333; color: #fff; padding: 10px 14px; border-radius: 10px; margin: 18px 0 8px; font-size: 18px; }
   .exprow { background: #fff; border-radius: 12px; padding: 12px 14px; margin: 8px 0;
@@ -66,10 +69,10 @@
 
   .loginlogo { text-align: center; font-size: 40px; margin: 20px 0 0; }
   .loginnote { text-align: center; color: #666; font-size: 14px; margin-top: 10px; }
-  .linklike { background: none; border: none; color: #2557a7; text-decoration: underline; font-size: 14px; cursor: pointer; padding: 6px; }
 
-  #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.7);
-             z-index: 50; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: #b30000; }
+  #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.8);
+             z-index: 50; align-items: center; justify-content: center; font-size: 19px; font-weight: bold;
+             color: #b30000; text-align: center; padding: 20px; }
   #toast { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 30px;
            background: #1a7f37; color: #fff; padding: 14px 22px; border-radius: 12px; font-size: 17px;
            z-index: 60; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-width: 90%; text-align: center; }
@@ -80,6 +83,7 @@
 <header>
   <span>Shelf Life Tracker</span>
   <span style="display:flex;align-items:center;gap:8px">
+    <span id="syncchip"></span>
     <span class="sub" id="hdrsub">Shop 'n Save</span>
     <button class="switch" id="switchbtn" onclick="logout()">Switch</button>
   </span>
@@ -117,6 +121,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
+      <p class="catline">fast edition v3</p>
     </div>
   </div>
 
@@ -130,6 +135,8 @@
       <button class="bigbtn expbtn" style="font-size:18px;padding:14px;margin-bottom:0" onclick="manualGo()">Look Up</button>
     </div>
     <button class="bigbtn expbtn" onclick="openExpiring()">&#9200; &nbsp;EXPIRING ITEMS</button>
+    <p class="catline"><span id="catline">Item list not downloaded yet</span>
+      <button class="linklike" onclick="refreshCatalog(true)">Update item list</button></p>
   </div>
 
   <!-- SCANNER -->
@@ -143,7 +150,7 @@
       </div>
     </div>
     <p class="hint" id="scanhint">Point the camera at the barcode</p>
-    <button class="bigbtn cancel" onclick="stopScan(true)">Cancel</button>
+    <button class="bigbtn cancel" onclick="stopScan(true)">Done</button>
   </div>
   <input type="file" id="photoIn" accept="image/*" capture="environment" style="display:none" onchange="photoPicked(this)">
 
@@ -175,7 +182,7 @@
       <div class="datesum" id="datesum"></div>
 
       <button class="bigbtn save" onclick="save()">&#10003; &nbsp;SAVE</button>
-      <button class="bigbtn cancel" onclick="goHome()">Cancel</button>
+      <button class="bigbtn cancel" onclick="cancelItem()">Cancel</button>
     </div>
   </div>
 
@@ -197,15 +204,155 @@ var stores = [];
 var departments = [];
 var current = null;       // item currently being saved
 var scanner = null;
+var lastEntry = 'manual'; // 'camera' or 'manual' — decides where SAVE returns to
 var CHIP_DAYS = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30];
 var ALL = 'ALL';
 
-/* ---------- talk to the Google Sheet backend ---------- */
-function api(action, data) {
+/* ================= on-device item catalog (instant lookups) ============ */
+var CATALOG = { list: [], map: null, at: 0 };
+var CATALOG_MAX_AGE = 6 * 60 * 60 * 1000;   // re-download in background after 6 hours
+
+function normUpc(u) {
+  return String(u || '').replace(/\D/g, '').replace(/^0+/, '');
+}
+function upcCandidates_(scanned) {
+  var digits = String(scanned || '').replace(/\D/g, '');
+  var list = [];
+  function add(v) {
+    var n = String(v || '').replace(/^0+/, '');
+    if (n && list.indexOf(n) < 0) list.push(n);
+  }
+  add(digits);
+  if (digits.replace(/^0+/, '').length >= 11) add(digits.substring(0, digits.length - 1));
+  var e = expandUpcE_(digits);
+  if (e) { add(e); add(e.substring(0, e.length - 1)); }
+  return list;
+}
+function expandUpcE_(digits) {
+  var d = String(digits || '');
+  if (d.length === 8) d = d.substring(1, 7);
+  else if (d.length === 7) d = d.substring(0, 6);
+  else if (d.length !== 6) return null;
+  var x = d.split(''), body, last = x[5];
+  if (last === '0' || last === '1' || last === '2') body = x[0] + x[1] + last + '0000' + x[2] + x[3] + x[4];
+  else if (last === '3') body = x[0] + x[1] + x[2] + '00000' + x[3] + x[4];
+  else if (last === '4') body = x[0] + x[1] + x[2] + x[3] + '00000' + x[4];
+  else body = x[0] + x[1] + x[2] + x[3] + x[4] + '0000' + last;
+  var full = '0' + body;
+  var sum = 0;
+  for (var i = 0; i < 11; i++) sum += Number(full.charAt(i)) * (i % 2 === 0 ? 3 : 1);
+  return full + String((10 - (sum % 10)) % 10);
+}
+function buildMap() {
+  CATALOG.map = {};
+  for (var i = 0; i < CATALOG.list.length; i++) {
+    CATALOG.map[normUpc(CATALOG.list[i][0])] = CATALOG.list[i];
+  }
+}
+function loadCatalog() {
+  try {
+    var raw = localStorage.getItem('slt_items');
+    if (raw) {
+      var obj = JSON.parse(raw);
+      CATALOG.list = obj.items || [];
+      CATALOG.at = obj.at || 0;
+      buildMap();
+    }
+  } catch (e) {}
+  updateCatLine();
+}
+function persistCatalog() {
+  try { localStorage.setItem('slt_items', JSON.stringify({ at: CATALOG.at, items: CATALOG.list })); } catch (e) {}
+}
+function updateCatLine() {
+  var el = $('catline');
+  if (!el) return;
+  if (!CATALOG.list.length) { el.textContent = 'Item list not downloaded yet'; return; }
+  var when = CATALOG.at ? new Date(CATALOG.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  el.textContent = CATALOG.list.length.toLocaleString() + ' items on this device' + (when ? ' · updated ' + when : '');
+}
+/* Download the item list. blocking=true shows the overlay (first run only). */
+function refreshCatalog(force, blocking) {
+  if (!API_URL || !AUTH) return;
+  if (!force && CATALOG.list.length && (Date.now() - CATALOG.at) < CATALOG_MAX_AGE) return;
+  if (blocking) busy(true, 'Setting up this device — downloading the item list (one time)…');
+  api('items').then(function (res) {
+    CATALOG.list = res.items || [];
+    CATALOG.at = Date.now();
+    buildMap();
+    persistCatalog();
+    updateCatLine();
+    if (blocking) busy(false);
+    if (force && !blocking) toast('Item list updated — ' + CATALOG.list.length.toLocaleString() + ' items');
+  }).catch(function (err) {
+    if (blocking) busy(false);
+    if (force) toast('Could not update the item list: ' + ((err && err.message) || err), true);
+  });
+}
+/* Instant local lookup — same matching rules as the server */
+function localFind(scanned) {
+  if (!CATALOG.map) return null;
+  var cands = upcCandidates_(scanned);
+  for (var i = 0; i < cands.length; i++) {
+    if (CATALOG.map[cands[i]]) return CATALOG.map[cands[i]];
+  }
+  return null;
+}
+
+/* ================= background save queue (never makes you wait) ======== */
+var QUEUE = [];
+var pumping = false;
+
+function loadQueue() {
+  try { var raw = localStorage.getItem('slt_queue'); if (raw) QUEUE = JSON.parse(raw) || []; } catch (e) {}
+  updateSyncChip();
+}
+function persistQueue() {
+  try { localStorage.setItem('slt_queue', JSON.stringify(QUEUE)); } catch (e) {}
+}
+function enqueue(job) {
+  job.auth = AUTH;                 // records belong to whoever was logged in when scanned
+  QUEUE.push(job);
+  persistQueue();
+  updateSyncChip();
+  pump();
+}
+function pump() {
+  if (pumping || !QUEUE.length || !API_URL) return;
+  pumping = true;
+  var job = QUEUE[0];
+  api(job.action, job.data, job.auth).then(function () {
+    QUEUE.shift();
+    persistQueue();
+    pumping = false;
+    updateSyncChip();
+    pump();
+  }).catch(function () {
+    pumping = false;
+    job.tries = (job.tries || 0) + 1;
+    persistQueue();
+    updateSyncChip();
+    setTimeout(pump, Math.min(30000, 3000 * job.tries));   // retry, backing off
+  });
+}
+setInterval(pump, 10000);          // safety net: keep trying while anything is queued
+function updateSyncChip() {
+  var chip = $('syncchip');
+  if (!chip) return;
+  if (QUEUE.length) {
+    chip.style.display = 'inline-block';
+    chip.textContent = QUEUE.length + ' syncing…';
+  } else {
+    chip.style.display = 'none';
+  }
+}
+
+/* ================= talk to the Google Sheet backend ==================== */
+function api(action, data, authOverride) {
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: action, data: data || {}, auth: AUTH })
+    body: JSON.stringify({ action: action, data: data || {}, auth: authOverride || AUTH })
   }).then(function (r) {
     if (!r.ok) throw new Error('Connection problem (HTTP ' + r.status + ')');
     return r.json();
@@ -215,20 +362,25 @@ function api(action, data) {
   });
 }
 
-/* ---------- helpers ---------- */
+/* ================= helpers ============================================= */
 function $(id) { return document.getElementById(id); }
 function show(id) {
   ['view-connect', 'view-login', 'view-home', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
 }
-function busy(on) { $('overlay').style.display = on ? 'flex' : 'none'; }
+function busy(on, msg) {
+  var o = $('overlay');
+  o.textContent = msg || 'Working…';
+  o.style.display = on ? 'flex' : 'none';
+}
 function toast(msg, bad) {
   var t = $('toast');
   t.textContent = msg;
   t.style.background = bad ? '#b30000' : '#1a7f37';
   t.style.display = 'block';
-  setTimeout(function () { t.style.display = 'none'; }, 2800);
+  clearTimeout(t._tm);
+  t._tm = setTimeout(function () { t.style.display = 'none'; }, 2400);
 }
 function fail(err) {
   busy(false);
@@ -252,7 +404,7 @@ function escp(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/* ---------- one-time connect ---------- */
+/* ================= one-time connect ==================================== */
 function loadApi() {
   try { API_URL = localStorage.getItem('slt_api') || null; } catch (e) {}
 }
@@ -283,7 +435,7 @@ function changeApi() {
   show('view-connect');
 }
 
-/* ---------- login / logout ---------- */
+/* ================= login / logout ====================================== */
 function loadAuth() {
   try { var s = localStorage.getItem('slt_auth'); if (s) AUTH = JSON.parse(s); } catch (e) {}
 }
@@ -320,19 +472,19 @@ function doLogin() {
     $('lgPin').value = '';
     prefillDepts();
     show('view-home');
+    // first login on this device: download the item list before scanning starts
+    refreshCatalog(false, !CATALOG.list.length);
   }).catch(function (err) {
     busy(false);
     AUTH = null;
     toast((err && err.message) ? err.message : String(err), true);
   });
 }
-
-/* Pre-pick the user's own department in the pickers */
 function prefillDepts() {
   if (AUTH && AUTH.dept !== ALL) $('niDept').value = AUTH.dept;
 }
 
-/* ---------- startup ---------- */
+/* ================= startup ============================================= */
 function applyInit(init) {
   stores = init.stores;
   departments = init.departments;
@@ -370,6 +522,8 @@ window.onload = function () {
   });
 
   loadApi();
+  loadCatalog();
+  loadQueue();
   if (!API_URL) { show('view-connect'); return; }
 
   busy(true);
@@ -378,23 +532,30 @@ window.onload = function () {
     applyInit(init);
     loadAuth();
     if (AUTH) {
-      // silently confirm the saved login still works (PIN may have been changed)
-      api('login').then(function () {
-        setHeader(); prefillDepts(); show('view-home');
-      }).catch(function () {
-        clearAuth(); showLogin();
-      });
+      // go straight in using the saved login; confirm it quietly in the background
+      setHeader(); prefillDepts(); show('view-home');
+      refreshCatalog(false, !CATALOG.list.length);
+      pump();
+      api('login').catch(function () { clearAuth(); showLogin(); });
     } else {
       showLogin();
     }
   }).catch(function (err) {
     busy(false);
-    toast('Could not reach the tracker: ' + ((err && err.message) || err), true);
-    show('view-connect');
+    // can't reach Google right now — still allow scanning if this device has
+    // a catalog and a saved login; queued saves will sync when it's back
+    loadAuth();
+    if (AUTH && CATALOG.list.length) {
+      setHeader(); prefillDepts(); show('view-home');
+      toast('Working offline — saves will sync when the connection is back', true);
+    } else {
+      toast('Could not reach the tracker: ' + ((err && err.message) || err), true);
+      show('view-connect');
+    }
   });
 };
 
-/* ---------- scanning ---------- */
+/* ================= scanning ============================================ */
 function FORMATS() {
   return [
     Html5QrcodeSupportedFormats.UPC_A,
@@ -415,21 +576,17 @@ function startScan() {
     function (text) {
       if (navigator.vibrate) navigator.vibrate(120);
       stopScan(false);
+      lastEntry = 'camera';
       lookup(text);
     },
     function () { /* no match in this frame — keep scanning */ }
   ).catch(function (err) {
-    // Live video blocked or unavailable — switch to snap-a-photo mode,
-    // which uses the device's own camera app and works everywhere.
     scanner = null;
     $('reader').style.display = 'none';
     $('scanhint').style.display = 'none';
     $('photoFallback').style.display = 'block';
   });
 }
-
-/* Snap-a-photo fallback: opens the phone/tablet's own camera app,
-   then reads the barcode from the photo it takes. */
 function snapPhoto() { $('photoIn').click(); }
 function photoPicked(inp) {
   if (!inp.files || !inp.files[0]) return;
@@ -441,6 +598,7 @@ function photoPicked(inp) {
     busy(false);
     try { fr.clear(); } catch (e) {}
     if (navigator.vibrate) navigator.vibrate(120);
+    lastEntry = 'camera';
     lookup(res.decodedText);
   }).catch(function () {
     busy(false);
@@ -455,46 +613,81 @@ function stopScan(goBack) {
   }
   if (goBack) show('view-home');
 }
-
 function manualGo() {
   var v = $('manual').value.replace(/\D/g, '');
   if (!v) { toast('Type a UPC number first', true); return; }
+  lastEntry = 'manual';
   lookup(v);
 }
+/* After saving or canceling: camera users go straight back to scanning */
+function nextAfterItem() {
+  if (lastEntry === 'camera') startScan();
+  else goHome();
+}
+function cancelItem() { nextAfterItem(); }
 
-/* ---------- lookup & date entry ---------- */
+/* ================= lookup & date entry ================================= */
 function lookup(upc) {
+  // INSTANT path: the item list on this device
+  if (CATALOG.map && CATALOG.list.length) {
+    var hit = localFind(upc);
+    if (hit) {
+      showKnownItem({ scanned: String(upc), key: String(hit[0]), found: true,
+                      description: String(hit[1]), department: String(hit[2] || ''), records: [] });
+      // quietly check for batches already being tracked (doesn't block anything)
+      var keyNow = String(hit[0]);
+      api('lookup', { upc: keyNow }).then(function (res) {
+        if (current && current.key === keyNow && res.records && res.records.length) {
+          renderRecords(res.records);
+        }
+      }).catch(function () {});
+    } else {
+      showNewItem(String(upc));
+    }
+    return;
+  }
+  // fallback (item list not downloaded yet): ask the server and wait
   busy(true);
   api('lookup', { upc: upc }).then(function (res) {
     busy(false);
-    $('manual').value = '';
-    current = res;
-    resetDate();
-    if (res.found) {
-      $('knownItem').style.display = 'block';
-      $('newItem').style.display = 'none';
-      $('itDesc').textContent = res.description;
-      $('itDept').textContent = res.department || 'No department yet';
-      $('itUpc').textContent = res.key;
-      var needPick = !res.department && AUTH && AUTH.dept === ALL;
-      $('kiDeptWrap').style.display = needPick ? 'block' : 'none';
-      if (needPick) $('kiDept').value = '';
-      var h = '';
-      res.records.forEach(function (r) {
-        h += '<div class="already">Already being tracked &mdash; expires <b>' + r.expDate +
-             '</b> (' + (r.daysLeft < 0 ? 'EXPIRED' : r.daysLeft + ' day' + (r.daysLeft === 1 ? '' : 's') + ' left') +
-             '). Saving again adds a new batch.</div>';
-      });
-      $('itRecords').innerHTML = h;
-    } else {
-      $('knownItem').style.display = 'none';
-      $('newItem').style.display = 'block';
-      $('niUpc').textContent = res.key || res.scanned;
-      $('niDesc').value = '';
-      $('niDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
-    }
-    show('view-item');
+    if (res.found) showKnownItem(res); else showNewItem(res.key || res.scanned);
+    if (res.records && res.records.length) renderRecords(res.records);
   }).catch(fail);
+}
+function showKnownItem(res) {
+  $('manual').value = '';
+  current = res;
+  resetDate();
+  $('knownItem').style.display = 'block';
+  $('newItem').style.display = 'none';
+  $('itDesc').textContent = res.description;
+  $('itDept').textContent = res.department || 'No department yet';
+  $('itUpc').textContent = res.key;
+  var needPick = !res.department && AUTH && AUTH.dept === ALL;
+  $('kiDeptWrap').style.display = needPick ? 'block' : 'none';
+  if (needPick) $('kiDept').value = '';
+  $('itRecords').innerHTML = '';
+  show('view-item');
+}
+function showNewItem(upc) {
+  $('manual').value = '';
+  current = { scanned: String(upc), key: normUpc(upc) || String(upc), found: false, description: '', department: '' };
+  resetDate();
+  $('knownItem').style.display = 'none';
+  $('newItem').style.display = 'block';
+  $('niUpc').textContent = current.key;
+  $('niDesc').value = '';
+  $('niDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
+  show('view-item');
+}
+function renderRecords(records) {
+  var h = '';
+  records.forEach(function (r) {
+    h += '<div class="already">Already being tracked &mdash; expires <b>' + r.expDate +
+         '</b> (' + (r.daysLeft < 0 ? 'EXPIRED' : r.daysLeft + ' day' + (r.daysLeft === 1 ? '' : 's') + ' left') +
+         '). Saving again adds a new batch.</div>';
+  });
+  $('itRecords').innerHTML = h;
 }
 
 function resetDate() {
@@ -523,7 +716,7 @@ function dateTyped() {
     (n < 0 ? 'already past!' : n + ' day' + (n === 1 ? '' : 's') + ' from today') + ')';
 }
 
-/* ---------- save ---------- */
+/* ================= save (instant — syncs in the background) ============ */
 function save() {
   if (!$('expDate').value) { toast('Pick the shelf life or expiration date first', true); return; }
   var isNew = $('newItem').style.display !== 'none';
@@ -536,6 +729,7 @@ function save() {
   var payload = {
     upc: current.key || current.scanned,
     isNew: isNew,
+    fillDept: !isNew && !current.department,
     description: isNew ? $('niDesc').value.trim() : current.description,
     department: pickedDept,
     expDate: $('expDate').value
@@ -543,17 +737,31 @@ function save() {
   if (!payload.department) { toast('Pick a department', true); return; }
   if (isNew && !payload.description) { toast('Type a brief description', true); return; }
 
-  busy(true);
-  api('save', payload).then(function (res) {
-    busy(false);
-    toast('Saved: ' + res.description + ' — expires ' + res.expDate);
-    goHome();
-  }).catch(fail);
+  // 1. keep this device's item list current, instantly
+  var key = normUpc(payload.upc) || String(payload.upc);
+  if (isNew) {
+    CATALOG.list.push([key, payload.description, payload.department]);
+    if (CATALOG.map) CATALOG.map[key] = CATALOG.list[CATALOG.list.length - 1];
+    persistCatalog();
+    updateCatLine();
+  } else if (payload.fillDept && CATALOG.map && CATALOG.map[normUpc(payload.upc)]) {
+    CATALOG.map[normUpc(payload.upc)][2] = payload.department;
+    persistCatalog();
+  }
+
+  // 2. queue the record for background sync — no waiting
+  enqueue({ action: 'save', data: payload });
+
+  // 3. confirm and go straight to the next scan
+  var p = payload.expDate.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  toast('Saved: ' + (payload.description || 'item') + ' — expires ' + pretty(d));
+  nextAfterItem();
 }
 
 function goHome() { show('view-home'); }
 
-/* ---------- expiring list ---------- */
+/* ================= expiring list ======================================= */
 function openExpiring() {
   busy(true);
   api('expiring').then(function (groups) {
@@ -586,7 +794,6 @@ function openExpiring() {
     show('view-exp');
   }).catch(fail);
 }
-
 function setStatus(id, status) {
   busy(true);
   api('status', { id: id, status: status }).then(function () {
