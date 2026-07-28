@@ -42,10 +42,12 @@
   input[type=text], input[type=date], input[type=tel], input[type=password], input[type=url], select {
     width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 10px; background: #fff; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-  .chip { padding: 12px 16px; font-size: 17px; border: 2px solid #c82018; color: #c82018;
-          background: #fff; border-radius: 999px; cursor: pointer; font-weight: bold; }
-  .chip.sel { background: #c82018; color: #fff; }
+  .datewrap { position: relative; margin-top: 4px; }
+  .datewrap input[type=date] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+  .datebtn { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 20px 14px;
+             border: 3px dashed #c82018; border-radius: 12px; background: #fff; color: #c82018;
+             font-size: 19px; font-weight: bold; text-align: center; }
+  .datebtn.haspick { border-style: solid; border-color: #1a7f37; color: #1a7f37; background: #f3faf5; }
   .datesum { font-size: 17px; margin-top: 10px; color: #333; }
   .datesum b { color: #c82018; }
 
@@ -125,7 +127,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v5</p>
+      <p class="catline">Charley Family Shop 'n Save · v6</p>
     </div>
   </div>
 
@@ -181,9 +183,13 @@
         <input type="text" id="niDesc" placeholder="e.g. 80/20 Ground Beef 1lb">
       </div>
 
-      <label>Shelf life — tap days left, or pick the date on the package</label>
-      <div class="chips" id="chips"></div>
-      <input type="date" id="expDate" style="margin-top:10px" onchange="dateTyped()">
+      <label>Date on the product</label>
+      <div class="datewrap">
+        <div class="datebtn" id="dateBtn"><span style="font-size:24px">&#128197;</span> <span id="dateBtnText">Tap to pick the date</span></div>
+        <input type="date" id="expDate" onchange="dateTyped()" aria-label="Expiration date on the product">
+      </div>
+      <label>No date printed? Days until it shrinks out:</label>
+      <select id="daysSel" onchange="daysPicked()"></select>
       <div class="datesum" id="datesum"></div>
 
       <button class="bigbtn save" onclick="save()">&#10003; &nbsp;SAVE</button>
@@ -210,7 +216,7 @@ var departments = [];
 var current = null;       // item currently being saved
 var scanner = null;
 var lastEntry = 'manual'; // 'camera' or 'manual' — decides where SAVE returns to
-var CHIP_DAYS = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30];
+var SHRINK_DAYS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 21, 30, 45, 60, 90];
 var ALL = 'ALL';
 
 /* ================= on-device item catalog (instant lookups) ============ */
@@ -599,12 +605,12 @@ function applyInit(init) {
 }
 
 window.onload = function () {
-  var c = $('chips');
-  CHIP_DAYS.forEach(function (n) {
-    var b = document.createElement('button');
-    b.className = 'chip'; b.textContent = n + (n === 1 ? ' day' : ' days');
-    b.onclick = function () { pickChip(n, b); };
-    c.appendChild(b);
+  var sel = $('daysSel');
+  sel.innerHTML = '<option value="">-- choose number of days --</option>';
+  SHRINK_DAYS.forEach(function (n) {
+    var o = document.createElement('option');
+    o.value = n; o.textContent = n + (n === 1 ? ' day' : ' days');
+    sel.appendChild(o);
   });
 
   loadApi();
@@ -778,28 +784,34 @@ function renderRecords(records) {
 
 function resetDate() {
   $('expDate').value = '';
+  $('daysSel').value = '';
   $('datesum').textContent = '';
-  var chips = document.querySelectorAll('.chip');
-  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
+  $('dateBtn').className = 'datebtn';
+  $('dateBtnText').textContent = 'Tap to pick the date';
 }
-function pickChip(n, btn) {
-  var chips = document.querySelectorAll('.chip');
-  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
-  btn.className = 'chip sel';
-  var d = todayPlus(n);
-  $('expDate').value = iso(d);
-  $('datesum').innerHTML = 'Expires <b>' + pretty(d) + '</b> (' + n + ' day' + (n === 1 ? '' : 's') + ' from today)';
+function showPicked_(d, n) {
+  $('dateBtn').className = 'datebtn haspick';
+  $('dateBtnText').textContent = 'Expires ' + pretty(d);
+  $('datesum').innerHTML = 'Expires <b>' + pretty(d) + '</b> (' +
+    (n < 0 ? 'already past!' : n === 0 ? 'today!' : n + ' day' + (n === 1 ? '' : 's') + ' from today') + ')';
 }
+/* calendar picked — the printed date wins, clear the days dropdown */
 function dateTyped() {
   var v = $('expDate').value;
   if (!v) return;
-  var chips = document.querySelectorAll('.chip');
-  for (var i = 0; i < chips.length; i++) chips[i].className = 'chip';
+  $('daysSel').value = '';
   var p = v.split('-');
   var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
   var n = Math.round((d - todayPlus(0)) / 86400000);
-  $('datesum').innerHTML = 'Expires <b>' + pretty(d) + '</b> (' +
-    (n < 0 ? 'already past!' : n + ' day' + (n === 1 ? '' : 's') + ' from today') + ')';
+  showPicked_(d, n);
+}
+/* days dropdown picked — compute the date from today */
+function daysPicked() {
+  var n = Number($('daysSel').value);
+  if (!n) return;
+  var d = todayPlus(n);
+  $('expDate').value = iso(d);
+  showPicked_(d, n);
 }
 
 /* ================= save (instant — syncs in the background) ============ */
