@@ -87,7 +87,7 @@
 <header>
   <span class="logoimg hlogo" title="Charley Family Shop 'n Save"></span>
   <span style="display:flex;align-items:center;gap:8px">
-    <span id="syncchip"></span>
+    <span id="syncchip" onclick="showSyncPanel()" style="cursor:pointer"></span>
     <span class="sub" id="hdrsub">Shelf Life Tracker</span>
     <button class="switch" id="switchbtn" onclick="logout()">Switch</button>
   </span>
@@ -125,7 +125,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v4</p>
+      <p class="catline">Charley Family Shop 'n Save · v5</p>
     </div>
   </div>
 
@@ -141,6 +141,7 @@
     <button class="bigbtn expbtn" onclick="openExpiring()">&#9200; &nbsp;EXPIRING ITEMS</button>
     <p class="catline"><span id="catline">Item list not downloaded yet</span>
       <button class="linklike" onclick="refreshCatalog(true)">Update item list</button></p>
+    <p class="catline" id="syncline"></p>
   </div>
 
   <!-- SCANNER -->
@@ -304,18 +305,26 @@ function localFind(scanned) {
 }
 
 /* ================= background save queue (never makes you wait) ======== */
+/* Saves sync ONE AT A TIME, in the order scanned, a second or two each.
+   Connection problems retry forever (nothing is ever lost). A save the
+   server actually REJECTS stops retrying, keeps its reason, and shows up
+   in the sync panel (tap the red chip) where it can be retried or removed. */
 var QUEUE = [];
+var FAILED = [];
 var pumping = false;
 
 function loadQueue() {
   try { var raw = localStorage.getItem('slt_queue'); if (raw) QUEUE = JSON.parse(raw) || []; } catch (e) {}
+  try { var rawF = localStorage.getItem('slt_failed'); if (rawF) FAILED = JSON.parse(rawF) || []; } catch (e) {}
   updateSyncChip();
 }
 function persistQueue() {
   try { localStorage.setItem('slt_queue', JSON.stringify(QUEUE)); } catch (e) {}
+  try { localStorage.setItem('slt_failed', JSON.stringify(FAILED)); } catch (e) {}
 }
 function enqueue(job) {
   job.auth = AUTH;                 // records belong to whoever was logged in when scanned
+  job.when = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   QUEUE.push(job);
   persistQueue();
   updateSyncChip();
@@ -331,24 +340,92 @@ function pump() {
     pumping = false;
     updateSyncChip();
     pump();
-  }).catch(function () {
+  }).catch(function (err) {
     pumping = false;
-    job.tries = (job.tries || 0) + 1;
-    persistQueue();
-    updateSyncChip();
-    setTimeout(pump, Math.min(30000, 3000 * job.tries));   // retry, backing off
+    if (err && err.permanent) {
+      // the server said no — stop retrying, keep it with its reason, tell the user
+      job.error = (err.message || 'Rejected');
+      FAILED.push(QUEUE.shift());
+      persistQueue();
+      updateSyncChip();
+      toast('A save was rejected: ' + job.error + ' — tap the red chip up top.', true);
+      pump();
+    } else {
+      // connection problem — keep the save and retry, backing off
+      job.tries = (job.tries || 0) + 1;
+      persistQueue();
+      updateSyncChip();
+      setTimeout(pump, Math.min(30000, 3000 * job.tries));
+    }
   });
 }
 setInterval(pump, 10000);          // safety net: keep trying while anything is queued
 function updateSyncChip() {
   var chip = $('syncchip');
-  if (!chip) return;
-  if (QUEUE.length) {
-    chip.style.display = 'inline-block';
-    chip.textContent = QUEUE.length + ' syncing…';
-  } else {
-    chip.style.display = 'none';
+  if (chip) {
+    if (FAILED.length) {
+      chip.style.display = 'inline-block';
+      chip.style.background = '#7a0000';
+      chip.textContent = FAILED.length + ' failed — tap';
+    } else if (QUEUE.length) {
+      chip.style.display = 'inline-block';
+      chip.style.background = '#c82018';
+      chip.textContent = QUEUE.length + ' syncing…';
+    } else {
+      chip.style.display = 'none';
+    }
   }
+  var line = $('syncline');
+  if (line) {
+    if (FAILED.length) { line.style.color = '#c82018'; line.textContent = FAILED.length + ' save(s) failed — tap the red chip at the top for details'; }
+    else if (QUEUE.length) { line.style.color = '#888'; line.textContent = QUEUE.length + ' waiting to sync…'; }
+    else { line.style.color = '#1a7f37'; line.textContent = 'All saves synced ✓'; }
+  }
+}
+
+/* ---- sync panel (tap the chip) ---- */
+function showSyncPanel() {
+  var h = '<div class="card"><p style="font-size:18px;font-weight:bold;margin:0 0 8px">Sync status</p>';
+  h += '<p style="margin:0 0 10px;font-size:15px;color:#555">' +
+       (QUEUE.length ? QUEUE.length + ' save(s) waiting to send (retried automatically).' : 'Nothing waiting to send.') + '</p>';
+  if (FAILED.length) {
+    h += '<p style="margin:0 0 6px;font-size:15px;font-weight:bold;color:#c82018">Rejected saves:</p>';
+    FAILED.forEach(function (j) {
+      var d = j.data || {};
+      h += '<div class="already" style="border-color:#e0b4b4;background:#fdf0f0">' +
+           escp(d.description || d.upc || 'item') + ' (' + escp(j.when || '') + ')<br><b>Reason:</b> ' + escp(j.error || 'unknown') + '</div>';
+    });
+    h += '<button class="bigbtn save" style="font-size:17px;padding:14px" onclick="retryFailed()">Retry these under my current login</button>';
+    h += '<button class="bigbtn cancel" style="font-size:15px;padding:12px" onclick="discardFailed()">Remove them (they will NOT be recorded)</button>';
+  }
+  h += '<button class="bigbtn cancel" style="font-size:15px;padding:12px" onclick="closeSyncPanel()">Close</button></div>';
+  var p = document.createElement('div');
+  p.id = 'syncpanel';
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:70;overflow:auto;padding:30px 16px';
+  p.innerHTML = '<div style="max-width:480px;margin:0 auto">' + h + '</div>';
+  closeSyncPanel();
+  document.body.appendChild(p);
+}
+function closeSyncPanel() {
+  var p = $('syncpanel');
+  if (p) p.parentNode.removeChild(p);
+}
+function retryFailed() {
+  // send them again under whoever is logged in RIGHT NOW
+  FAILED.forEach(function (j) { j.auth = AUTH; j.error = ''; j.tries = 0; QUEUE.push(j); });
+  FAILED = [];
+  persistQueue();
+  updateSyncChip();
+  closeSyncPanel();
+  toast('Retrying under ' + storeLabel(AUTH.store) + ' · ' + deptLabel(AUTH.dept));
+  pump();
+}
+function discardFailed() {
+  FAILED = [];
+  persistQueue();
+  updateSyncChip();
+  closeSyncPanel();
+  toast('Removed. Those scans were not recorded.', true);
 }
 
 /* ================= talk to the Google Sheet backend ==================== */
@@ -361,7 +438,12 @@ function api(action, data, authOverride) {
     if (!r.ok) throw new Error('Connection problem (HTTP ' + r.status + ')');
     return r.json();
   }).then(function (res) {
-    if (!res.ok) throw new Error(res.error || 'Something went wrong');
+    if (!res.ok) {
+      // the server answered and said no — this is a real rejection, not a bad connection
+      var e = new Error(res.error || 'Something went wrong');
+      e.permanent = true;
+      throw e;
+    }
     return res.result;
   });
 }
@@ -722,6 +804,10 @@ function dateTyped() {
 
 /* ================= save (instant — syncs in the background) ============ */
 function save() {
+  if (AUTH && AUTH.store === ALL) {
+    toast("You're logged in as All Stores — tap Switch and log in under one store to save items.", true);
+    return;
+  }
   if (!$('expDate').value) { toast('Pick the shelf life or expiration date first', true); return; }
   var isNew = $('newItem').style.display !== 'none';
   var pickedDept;
