@@ -127,7 +127,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v7</p>
+      <p class="catline">Charley Family Shop 'n Save · v8</p>
     </div>
   </div>
 
@@ -222,8 +222,37 @@ var SHRINK_DAYS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 21, 30, 45, 60
 var ALL = 'ALL';
 
 /* ================= on-device item catalog (instant lookups) ============ */
-var CATALOG = { list: [], map: null, at: 0 };
-var CATALOG_MAX_AGE = 6 * 60 * 60 * 1000;   // re-download in background after 6 hours
+/* items + the case-UPC/order-code cross-reference live on the device in
+   IndexedDB (roomier than localStorage — this data set is a few MB) */
+var CATALOG = { list: [], codes: [], map: null, codeMap: null, at: 0 };
+var CATALOG_MAX_AGE = 24 * 60 * 60 * 1000;  // re-download in background daily
+
+function idbOpen_() {
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open('slt', 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore('kv'); };
+    r.onsuccess = function () { res(r.result); };
+    r.onerror = function () { rej(r.error); };
+  });
+}
+function idbGet_(k) {
+  return idbOpen_().then(function (db) {
+    return new Promise(function (res, rej) {
+      var t = db.transaction('kv').objectStore('kv').get(k);
+      t.onsuccess = function () { res(t.result); };
+      t.onerror = function () { rej(t.error); };
+    });
+  });
+}
+function idbSet_(k, v) {
+  return idbOpen_().then(function (db) {
+    return new Promise(function (res, rej) {
+      var t = db.transaction('kv', 'readwrite').objectStore('kv').put(v, k);
+      t.onsuccess = function () { res(); };
+      t.onerror = function () { rej(t.error); };
+    });
+  });
+}
 
 function normUpc(u) {
   return String(u || '').replace(/\D/g, '').replace(/^0+/, '');
@@ -261,28 +290,41 @@ function buildMap() {
   for (var i = 0; i < CATALOG.list.length; i++) {
     CATALOG.map[normUpc(CATALOG.list[i][0])] = CATALOG.list[i];
   }
+  CATALOG.codeMap = {};
+  for (var j = 0; j < CATALOG.codes.length; j++) {
+    CATALOG.codeMap[normUpc(CATALOG.codes[j][0])] = String(CATALOG.codes[j][1]);
+  }
 }
 function loadCatalog() {
-  try {
-    var raw = localStorage.getItem('slt_items');
-    if (raw) {
-      var obj = JSON.parse(raw);
+  return idbGet_('catalog').then(function (obj) {
+    if (obj) {
       CATALOG.list = obj.items || [];
+      CATALOG.codes = obj.codes || [];
       CATALOG.at = obj.at || 0;
       buildMap();
     }
-  } catch (e) {}
-  updateCatLine();
+  }).catch(function () {
+    // IndexedDB unavailable — try the older localStorage copy (items only)
+    try {
+      var raw = localStorage.getItem('slt_items');
+      if (raw) {
+        var o = JSON.parse(raw);
+        CATALOG.list = o.items || []; CATALOG.at = o.at || 0; buildMap();
+      }
+    } catch (e) {}
+  }).then(updateCatLine);
 }
 function persistCatalog() {
-  try { localStorage.setItem('slt_items', JSON.stringify({ at: CATALOG.at, items: CATALOG.list })); } catch (e) {}
+  idbSet_('catalog', { at: CATALOG.at, items: CATALOG.list, codes: CATALOG.codes }).catch(function () {});
+  try { localStorage.removeItem('slt_items'); } catch (e) {}   // retire the old, smaller copy
 }
 function updateCatLine() {
   var el = $('catline');
   if (!el) return;
   if (!CATALOG.list.length) { el.textContent = 'Item list not downloaded yet'; return; }
   var when = CATALOG.at ? new Date(CATALOG.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  el.textContent = CATALOG.list.length.toLocaleString() + ' items on this device' + (when ? ' · updated ' + when : '');
+  var codesTxt = CATALOG.codes.length ? ' + ' + CATALOG.codes.length.toLocaleString() + ' case/order codes' : '';
+  el.textContent = CATALOG.list.length.toLocaleString() + ' items' + codesTxt + ' on this device' + (when ? ' · updated ' + when : '');
 }
 /* Download the item list. blocking=true shows the overlay (first run only). */
 function refreshCatalog(force, blocking) {
@@ -291,6 +333,7 @@ function refreshCatalog(force, blocking) {
   if (blocking) busy(true, 'Setting up this device — downloading the item list (one time)…');
   api('items').then(function (res) {
     CATALOG.list = res.items || [];
+    CATALOG.codes = res.codes || [];
     CATALOG.at = Date.now();
     buildMap();
     persistCatalog();
@@ -302,12 +345,19 @@ function refreshCatalog(force, blocking) {
     if (force) toast('Could not update the item list: ' + ((err && err.message) || err), true);
   });
 }
-/* Instant local lookup — same matching rules as the server */
+/* Instant local lookup — item barcodes first, then the case-UPC /
+   order-code cross-reference, all with the same matching rules */
 function localFind(scanned) {
   if (!CATALOG.map) return null;
   var cands = upcCandidates_(scanned);
   for (var i = 0; i < cands.length; i++) {
     if (CATALOG.map[cands[i]]) return CATALOG.map[cands[i]];
+  }
+  if (CATALOG.codeMap) {
+    for (var j = 0; j < cands.length; j++) {
+      var target = CATALOG.codeMap[cands[j]];
+      if (target && CATALOG.map[normUpc(target)]) return CATALOG.map[normUpc(target)];
+    }
   }
   return null;
 }
@@ -630,8 +680,8 @@ window.onload = function () {
   updateCountLine();
 
   loadApi();
-  loadCatalog();
   loadQueue();
+  loadCatalog().then(function () {
   if (!API_URL) { show('view-connect'); return; }
 
   busy(true);
@@ -661,6 +711,7 @@ window.onload = function () {
       show('view-connect');
     }
   });
+  });
 };
 
 /* ================= scanning ============================================ */
@@ -670,7 +721,9 @@ function FORMATS() {
     Html5QrcodeSupportedFormats.UPC_E,
     Html5QrcodeSupportedFormats.EAN_13,
     Html5QrcodeSupportedFormats.EAN_8,
-    Html5QrcodeSupportedFormats.CODE_128
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.ITF,       // case barcodes (ITF-14 on shippers)
+    Html5QrcodeSupportedFormats.CODE_39    // vendor order tags
   ];
 }
 /* short confirmation beep (works in noisy aisles where vibrate is missed) */
