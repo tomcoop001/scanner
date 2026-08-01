@@ -132,7 +132,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v9</p>
+      <p class="catline">Charley Family Shop 'n Save · v10</p>
     </div>
   </div>
 
@@ -145,14 +145,23 @@
       <small style="font-weight:normal;font-size:14px">count the store</small></button>
   </div>
 
-  <!-- INVENTORY HOME -->
+  <!-- INVENTORY MENU -->
   <div id="view-invhome" class="view">
-    <div class="card" style="padding:12px">
-      <div style="display:flex;gap:8px">
-        <button class="areabtn" id="areaFloor" onclick="setArea('floor')">&#128722; SALES FLOOR<small>each item @ retail</small></button>
-        <button class="areabtn" id="areaBack" onclick="setArea('back')">&#128230; BACK ROOM<small>cases @ landed cost</small></button>
-      </div>
-    </div>
+    <button class="bigbtn scanbtn" id="areaFloor" onclick="enterArea('floor')">&#128722; SALES FLOOR
+      <small style="font-weight:normal;font-size:14px;display:block">each item @ retail</small>
+      <span id="subFloor" style="display:none;font-size:14px;background:#fff;color:#1a7f37;border-radius:8px;padding:2px 10px;margin-top:4px">&#10003; SUBMITTED</span></button>
+    <button class="bigbtn scanbtn" id="areaBack" onclick="enterArea('back')" style="background:#8a1610">&#128230; BACK ROOM
+      <small style="font-weight:normal;font-size:14px;display:block">cases @ landed cost</small>
+      <span id="subBack" style="display:none;font-size:14px;background:#fff;color:#1a7f37;border-radius:8px;padding:2px 10px;margin-top:4px">&#10003; SUBMITTED</span></button>
+    <button class="bigbtn save" onclick="finalizeInv()">&#128221; FINALIZE INVENTORY</button>
+    <p class="catline" id="invtally"></p>
+    <p class="catline"><button class="linklike" onclick="zeroTally()">zero this device's tally</button> &middot;
+       <button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
+  </div>
+
+  <!-- INVENTORY COUNTING SESSION -->
+  <div id="view-invcount" class="view">
+    <div class="card" style="padding:12px;text-align:center;font-size:18px;font-weight:bold" id="areaTitle"></div>
     <button class="bigbtn scanbtn" onclick="startScan()">&#128247; &nbsp;SCAN TO COUNT</button>
     <div class="card">
       <label for="iManual">Or type / scan-gun a UPC, case, or order code:</label>
@@ -160,9 +169,9 @@
              onkeydown="if(event.key==='Enter'){invManualGo()}">
       <button class="bigbtn expbtn" style="font-size:18px;padding:14px;margin-bottom:0" onclick="invManualGo()">Look Up</button>
     </div>
-    <p class="catline" id="invtally"></p>
-    <p class="catline"><button class="linklike" onclick="zeroTally()">zero this device's tally</button> &middot;
-       <button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
+    <p class="catline" id="sessline"></p>
+    <button class="bigbtn save" onclick="submitArea()">&#10003; &nbsp;SUBMIT <span id="submitAreaName"></span></button>
+    <button class="bigbtn cancel" onclick="exitArea()">&#8592; &nbsp;Back (finish this area later)</button>
   </div>
 
   <!-- INVENTORY ITEM / QUANTITY -->
@@ -597,8 +606,8 @@ function api(action, data, authOverride) {
 /* ================= helpers ============================================= */
 function $(id) { return document.getElementById(id); }
 function show(id) {
-  ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invitem',
-   'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+  ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invcount',
+   'view-invitem', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
 }
@@ -691,23 +700,87 @@ function setHeader() {
     $('switchbtn').style.display = 'none';
   }
 }
-function homeView() { return APPMODE === 'inv' ? 'view-invhome' : 'view-home'; }
+var INVSESSION = false;             // true while counting inside one area
+var SESS = { n: 0, amt: 0 };        // this area session's running tally
+function homeView() {
+  if (APPMODE !== 'inv') return 'view-home';
+  return INVSESSION ? 'view-invcount' : 'view-invhome';
+}
 function pickMode(m) {
   APPMODE = m;
+  INVSESSION = false;
   setHeader();
   if (m === 'inv') {
-    setArea(INVAREA);
-    updateTallyLine();
+    paintInvMenu();
     show('view-invhome');
   } else {
     show('view-home');
   }
 }
-function setArea(a) {
+function areaName() { return INVAREA === 'back' ? 'BACK ROOM' : 'SALES FLOOR'; }
+function enterArea(a) {
   INVAREA = (a === 'back') ? 'back' : 'floor';
-  try { localStorage.setItem('slt_invarea', INVAREA); } catch (e) {}
-  $('areaFloor').className = 'areabtn' + (INVAREA === 'floor' ? ' sel' : '');
-  $('areaBack').className = 'areabtn' + (INVAREA === 'back' ? ' sel' : '');
+  INVSESSION = true;
+  SESS = { n: 0, amt: 0 };
+  $('areaTitle').innerHTML = (INVAREA === 'back' ? '&#128230; BACK ROOM — cases @ landed cost' : '&#128722; SALES FLOOR — each item @ retail');
+  $('submitAreaName').textContent = areaName();
+  updateSessLine();
+  show('view-invcount');
+}
+function exitArea() {
+  INVSESSION = false;
+  stopScan(false);
+  paintInvMenu();
+  show('view-invhome');
+}
+function submitArea() {
+  if (!confirm('Done scanning the ' + areaName() + ' for your department?')) return;
+  var s = subLoad();
+  if (INVAREA === 'back') s.b = true; else s.f = true;
+  subSave(s);
+  INVSESSION = false;
+  paintInvMenu();
+  show('view-invhome');
+  toast(areaName() + ' submitted ✓');
+}
+/* submitted flags are per store+department login on this device */
+function subKey() { return 'slt_invsub_' + (AUTH ? AUTH.store + '|' + AUTH.dept : ''); }
+function subLoad() {
+  try { return JSON.parse(localStorage.getItem(subKey())) || { f: false, b: false }; }
+  catch (e) { return { f: false, b: false }; }
+}
+function subSave(s) { try { localStorage.setItem(subKey(), JSON.stringify(s)); } catch (e) {} }
+function paintInvMenu() {
+  var s = subLoad();
+  $('subFloor').style.display = s.f ? 'inline-block' : 'none';
+  $('subBack').style.display = s.b ? 'inline-block' : 'none';
+  updateTallyLine();
+}
+function updateSessLine() {
+  $('sessline').textContent = 'This session: ' + SESS.n + ' count(s)' +
+    (SESS.amt ? ' · $' + SESS.amt.toFixed(2) : '');
+}
+function finalizeInv() {
+  var s = subLoad();
+  if (!(s.f && s.b)) {
+    toast('Submit BOTH Sales Floor and Back Room before finalizing', true);
+    return;
+  }
+  if (QUEUE.length) {
+    toast('Your counts are still syncing — give it a few seconds and try again', true);
+    pump();
+    return;
+  }
+  if (!confirm('Are you sure you have completed scanning ALL of your department — Sales Floor AND Back Room?')) return;
+  busy(true, 'Finalizing your inventory and emailing it…');
+  api('invFinalize', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+    busy(false);
+    subSave({ f: false, b: false });
+    paintInvMenu();
+    try { localStorage.removeItem('slt_invtally'); } catch (e) {}
+    updateTallyLine();
+    toast('Inventory finalized — $' + Number(res.total).toFixed(2) + ' emailed to ' + (res.email || 'the manager'));
+  }).catch(fail);
 }
 /* this device's running count tally (the sheet's Inv Summary is the real total) */
 function tallyLoad_() {
@@ -1210,6 +1283,9 @@ function saveInv() {
     value: v === '' ? '' : v, isNew: isNew
   } });
   bumpTally(v === '' ? 0 : qty * v);
+  SESS.n++;
+  if (v !== '') SESS.amt += Math.round(qty * v * 100) / 100;
+  updateSessLine();
   var ext = (v === '') ? '' : ' ($' + (Math.round(qty * v * 100) / 100).toFixed(2) + ')';
   toast('Counted ' + qty + (INVAREA === 'back' ? ' case(s)' : '') + ': ' + desc + ext);
   nextAfterItem();
