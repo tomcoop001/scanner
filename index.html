@@ -91,8 +91,14 @@
   @keyframes pslide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
   #ovdetail, #ovelapsed { font-size: 14px; color: #666; margin-top: 2px; }
   #toast { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 30px;
-           background: #1a7f37; color: #fff; padding: 14px 22px; border-radius: 12px; font-size: 17px;
-           z-index: 60; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-width: 90%; text-align: center; }
+           background: #1a7f37; color: #fff; padding: 16px 24px; border-radius: 12px; font-size: 19px;
+           font-weight: bold; z-index: 60; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-width: 92%; text-align: center; }
+  #appmodal { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 80;
+              display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #appmodal .card { width: 100%; max-width: 440px; }
+  #amMsg { font-size: 22px; line-height: 1.4; color: #111; font-weight: bold; margin: 0 0 14px; }
+  #amInput { width: 100%; font-size: 38px; font-weight: bold; text-align: center; padding: 16px;
+             border: 3px solid #c82018; border-radius: 12px; color: #111; }
   .empty { text-align: center; color: #666; padding: 30px 10px; font-size: 17px; }
 </style>
 </head>
@@ -138,7 +144,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v16</p>
+      <p class="catline">Charley Family Shop 'n Save · v17</p>
     </div>
   </div>
 
@@ -845,6 +851,44 @@ function toast(msg, bad) {
   clearTimeout(t._tm);
   t._tm = setTimeout(function () { t.style.display = 'none'; }, 2400);
 }
+/* the app's own big-print dialogs — no browser "…github.io says" popups */
+function appModal(msg, opts, onOk) {
+  closeAppModal();
+  var wrap = document.createElement('div');
+  wrap.id = 'appmodal';
+  var inputHtml = opts.input
+    ? '<input id="amInput" type="text" inputmode="' + opts.input + '" value="' + escp(opts.value || '') + '" autocomplete="off">'
+    : '';
+  wrap.innerHTML = '<div class="card"><p id="amMsg">' + msg + '</p>' + inputHtml +
+    '<button class="bigbtn save" id="amOk" style="font-size:23px">' + (opts.okText || 'OK') + '</button>' +
+    '<button class="bigbtn cancel" id="amCancel" style="font-size:20px">' + (opts.cancelText || 'Cancel') + '</button></div>';
+  document.body.appendChild(wrap);
+  var inp = $('amInput');
+  if (inp) {
+    setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) {} }, 60);
+    inp.onkeydown = function (e) { if (e.key === 'Enter') $('amOk').click(); };
+  }
+  $('amOk').onclick = function () {
+    var v = inp ? inp.value : true;
+    closeAppModal();
+    onOk(v);
+  };
+  $('amCancel').onclick = function () {
+    closeAppModal();
+    if (opts.onCancel) opts.onCancel();
+  };
+}
+function closeAppModal() {
+  var m = $('appmodal');
+  if (m) m.parentNode.removeChild(m);
+}
+function appConfirm(msg, onYes, onNo) {
+  appModal(msg, { okText: 'YES', cancelText: 'NO', onCancel: onNo }, function () { onYes(); });
+}
+function appPrompt(msg, value, mode, onOk, onCancel) {
+  appModal(msg, { input: mode || 'decimal', value: value, okText: 'OK', onCancel: onCancel }, onOk);
+}
+
 function fail(err) {
   busy(false);
   var msg = (err && err.message ? err.message : String(err));
@@ -965,15 +1009,16 @@ function exitArea() {
   show('view-invhome');
 }
 function submitArea() {
-  if (!confirm('Done scanning the ' + areaName() + ' for your department?')) return;
-  var s = subLoad();
-  if (INVAREA === 'back') s.b = true; else s.f = true;
-  subSave(s);
-  INVSESSION = false;
-  sessClear();
-  paintInvMenu();
-  show('view-invhome');
-  toast(areaName() + ' submitted ✓');
+  appConfirm('Done scanning the ' + areaName() + ' for your department?', function () {
+    var s = subLoad();
+    if (INVAREA === 'back') s.b = true; else s.f = true;
+    subSave(s);
+    INVSESSION = false;
+    sessClear();
+    paintInvMenu();
+    show('view-invhome');
+    toast(areaName() + ' submitted ✓');
+  });
 }
 /* submitted flags are per store+department login on this device */
 function subKey() { return 'slt_invsub_' + (AUTH ? AUTH.store + '|' + AUTH.dept : ''); }
@@ -1033,7 +1078,7 @@ function finalizeInv() {
     var h = '<div class="card"><p style="font-size:20px;font-weight:bold;margin:0 0 8px">Finalize inventory?</p>' +
       '<div class="exprow"><div class="d">&#128722; Sales Floor: ' + res.floor.length + ' scan(s) — ' + fm(res.floorTotal) + ' at retail</div></div>' +
       '<div class="exprow"><div class="d">&#128230; Back Room: ' + res.back.length + ' scan(s) — ' + fm(res.backTotal) + ' at cost</div></div>' +
-      '<p style="font-size:15px;color:#555;margin:10px 0">Are you SURE you have completed scanning ALL of your department — ' +
+      '<p style="font-size:19px;color:#222;line-height:1.4;margin:10px 0">Are you SURE you have completed scanning ALL of your department — ' +
       'Sales Floor AND Back Room? This emails the complete inventory to your manager.</p>' +
       '<button class="bigbtn save" onclick="doFinalize()">&#10003; &nbsp;YES — FINALIZE &amp; EMAIL IT</button>' +
       '<button class="bigbtn cancel" onclick="closeSyncPanel()">NOT YET — keep counting</button></div>';
@@ -1613,54 +1658,59 @@ function editValue() {
   if (INVAREA === 'back') {
     if (!current.code) { toast('Scan the CASE or ORDER barcode to set a case cost', true); return; }
     var curC = (current.cost === '' || current.cost === null || current.cost === undefined) ? '' : Number(current.cost).toFixed(2);
-    if (curC !== '' && !confirm('Change this case cost for everyone?')) return;
-    var v = prompt('Case cost ($):', curC);
-    if (v === null) return;
-    var n = Number(String(v).replace(/[^0-9.]/g, ''));
-    if (!(n > 0)) { toast('That doesn\'t look like an amount', true); return; }
-    n = Math.round(n * 100) / 100;
-    current.cost = n;
-    var e = CATALOG.codeMap && CATALOG.codeMap[current.code];
-    if (e) {
-      e.c = n;
-      for (var i = 0; i < CATALOG.codes.length; i++) {
-        if (normUpc(CATALOG.codes[i][0]) === current.code) { CATALOG.codes[i][2] = n; break; }
-      }
-      persistCatalog();
-    }
-    enqueue({ action: 'priceSet', data: { code: current.code, cost: n } });
-    renderInvValue();
-    toast('Case cost saved for everyone: ' + fm(n));
+    var askC = function () {
+      appPrompt('Case cost ($):', curC, 'decimal', function (v) {
+        var n = Number(String(v).replace(/[^0-9.]/g, ''));
+        if (!(n > 0)) { toast('That doesn\'t look like an amount', true); return; }
+        n = Math.round(n * 100) / 100;
+        current.cost = n;
+        var e = CATALOG.codeMap && CATALOG.codeMap[current.code];
+        if (e) {
+          e.c = n;
+          for (var i = 0; i < CATALOG.codes.length; i++) {
+            if (normUpc(CATALOG.codes[i][0]) === current.code) { CATALOG.codes[i][2] = n; break; }
+          }
+          persistCatalog();
+        }
+        enqueue({ action: 'priceSet', data: { code: current.code, cost: n } });
+        renderInvValue();
+        toast('Case cost saved for everyone: ' + fm(n));
+      });
+    };
+    if (curC !== '') appConfirm('Change this case cost for everyone?', askC); else askC();
   } else {
     if (!current.found) { toast('Save the item first, then set its price on the next scan', true); return; }
     var curR = (current.retail === '' || current.retail === null || current.retail === undefined) ? '' : Number(current.retail).toFixed(2);
-    if (curR !== '' && !confirm('Change this price for everyone?')) return;
-    var v2 = prompt(current.bylb ? 'Retail per POUND ($):' : 'Retail each ($):', curR);
-    if (v2 === null) return;
-    var n2 = Number(String(v2).replace(/[^0-9.]/g, ''));
-    if (!(n2 > 0)) { toast('That doesn\'t look like an amount', true); return; }
-    n2 = Math.round(n2 * 100) / 100;
-    current.retail = n2;
-    var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
-    if (entry) { entry[3] = n2; persistCatalog(); }
-    enqueue({ action: 'priceSet', data: { upc: current.key, retail: n2 } });
-    renderInvValue();
-    toast('Price saved for everyone: ' + fm(n2));
+    var askR = function () {
+      appPrompt(current.bylb ? 'Retail per POUND ($):' : 'Retail each ($):', curR, 'decimal', function (v2) {
+        var n2 = Number(String(v2).replace(/[^0-9.]/g, ''));
+        if (!(n2 > 0)) { toast('That doesn\'t look like an amount', true); return; }
+        n2 = Math.round(n2 * 100) / 100;
+        current.retail = n2;
+        var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
+        if (entry) { entry[3] = n2; persistCatalog(); }
+        enqueue({ action: 'priceSet', data: { upc: current.key, retail: n2 } });
+        renderInvValue();
+        toast('Price saved for everyone: ' + fm(n2));
+      });
+    };
+    if (curR !== '') appConfirm('Change this price for everyone?', askR); else askR();
   }
 }
 /* the one-tap "sold by the pound" switch — remembered forever, everywhere */
 function toggleLb() {
   var to = !current.bylb;
-  if (!confirm(to
+  appConfirm(to
       ? 'Mark this item as sold BY THE POUND? Counts become weights (e.g. 8.4 lbs) and the price is per lb.'
-      : 'Change this item to by-the-unit counting?')) return;
-  current.bylb = to;
-  // explicit Y or N — an override that outranks the department assumption
-  var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
-  if (entry) { entry[4] = to ? 'Y' : 'N'; persistCatalog(); }
-  enqueue({ action: 'priceSet', data: { upc: current.key, bylb: to ? 'Y' : 'N' } });
-  renderInvValue();
-  toast(to ? 'Saved — this item now counts by the pound, for everyone' : 'Saved — this item counts by the unit, for everyone');
+      : 'Change this item to by-the-unit counting?', function () {
+    current.bylb = to;
+    // explicit Y or N — an override that outranks the department assumption
+    var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
+    if (entry) { entry[4] = to ? 'Y' : 'N'; persistCatalog(); }
+    enqueue({ action: 'priceSet', data: { upc: current.key, bylb: to ? 'Y' : 'N' } });
+    renderInvValue();
+    toast(to ? 'Saved — this item now counts by the pound, for everyone' : 'Saved — this item counts by the unit, for everyone');
+  });
 }
 function invValue_() {
   var v = (INVAREA === 'back') ? current.cost : current.retail;
@@ -1742,15 +1792,16 @@ function buildVendorSelect() {
 }
 function txVendorChange() {
   if ($('txVendor').value !== '__new') return;
-  var name = prompt('New vendor name:');
-  name = (name || '').trim();
-  if (name) {
-    if (CATALOG.vendors.indexOf(name) < 0) { CATALOG.vendors.push(name); persistCatalog(); }
-    buildVendorSelect();
-    $('txVendor').value = name;
-  } else {
-    $('txVendor').value = 'UNFI';
-  }
+  appPrompt('New vendor name:', '', 'text', function (name) {
+    name = (name || '').trim();
+    if (name) {
+      if (CATALOG.vendors.indexOf(name) < 0) { CATALOG.vendors.push(name); persistCatalog(); }
+      buildVendorSelect();
+      $('txVendor').value = name;
+    } else {
+      $('txVendor').value = 'UNFI';
+    }
+  }, function () { $('txVendor').value = 'UNFI'; });
 }
 function openTxn(type) {
   TXNTYPE = type;
