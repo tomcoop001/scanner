@@ -138,6 +138,7 @@
       <input type="password" id="lgPin" inputmode="numeric" placeholder="PIN"
              onkeydown="if(event.key==='Enter'){doLogin()}">
       <button class="bigbtn scanbtn" onclick="doLogin()">LOG IN</button>
+      <button class="bigbtn expbtn" onclick="openSignup()">CREATE ACCOUNT</button>
       <p style="text-align:center;margin:2px 0 0">
         <button class="linklike" style="font-size:16px" onclick="forgotPin()">Forgot PIN? — email me a new one</button>
       </p>
@@ -145,7 +146,29 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v19</p>
+      <p class="catline">Charley Family Shop 'n Save · v20</p>
+    </div>
+  </div>
+
+  <!-- CREATE ACCOUNT (request access; the owner approves by email) -->
+  <div id="view-signup" class="view">
+    <div class="logoimg biglogo"></div>
+    <div class="card">
+      <p class="desc">Create your account</p>
+      <label for="suName">Your name</label>
+      <input type="text" id="suName" autocomplete="name" placeholder="First Last">
+      <label for="suEmail">Your email</label>
+      <input type="text" id="suEmail" inputmode="email" autocomplete="email" autocapitalize="off"
+             placeholder="you@shopnsave66.com">
+      <label for="suStore">Your store</label>
+      <select id="suStore"></select>
+      <label for="suDept">Your department</label>
+      <select id="suDept"></select>
+      <button class="bigbtn scanbtn" onclick="signupGo()">SUBMIT REQUEST</button>
+      <p class="loginnote">The owner gets your request by email. Once approved, your PIN is emailed to you automatically.</p>
+      <p style="text-align:center;margin:4px 0 0">
+        <button class="linklike" onclick="showLogin()">&#8592; back to log in</button>
+      </p>
     </div>
   </div>
 
@@ -800,7 +823,7 @@ function api(action, data, authOverride) {
 function $(id) { return document.getElementById(id); }
 var lastShown = null;
 function showRaw(id) {
-  ['view-connect', 'view-login', 'view-scope', 'view-mode', 'view-home', 'view-invhome',
+  ['view-connect', 'view-login', 'view-signup', 'view-scope', 'view-mode', 'view-home', 'view-invhome',
    'view-invcount', 'view-invitem', 'view-invreview', 'view-txn', 'view-sales', 'view-trans',
    'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
@@ -1261,6 +1284,11 @@ function doLogin() {
     ACCESS = res.access || [];
     accessSave();
     PEND = { email: email, pin: pinv };
+    // their account name signs their counts automatically
+    if (!whoGet() && res.name) {
+      var ini = res.name.split(/\s+/).map(function (w) { return w.charAt(0); }).join('').toUpperCase().slice(0, 3);
+      if (ini) { try { localStorage.setItem('slt_who', ini); } catch (e) {} }
+    }
     var sts = allowedStores();
     if (sts.length === 1) {
       var ds = allowedDepts(sts[0]);
@@ -1319,6 +1347,35 @@ function switchScope() {
     }
   }
   logout();
+}
+function openSignup() {
+  var st = $('suStore'), dp = $('suDept');
+  st.innerHTML = ''; dp.innerHTML = '';
+  stores.forEach(function (s) {
+    var o = document.createElement('option'); o.value = s; o.textContent = s; st.appendChild(o);
+  });
+  departments.forEach(function (d) {
+    var o = document.createElement('option'); o.value = d; o.textContent = d; dp.appendChild(o);
+  });
+  $('suEmail').value = $('lgEmail').value.trim();
+  show('view-signup');
+}
+function signupGo() {
+  var name = $('suName').value.trim();
+  var email = $('suEmail').value.trim();
+  if (!name) { toast('Type your name', true); return; }
+  if (!email || email.indexOf('@') < 0) { toast('Type your email address', true); return; }
+  busy(true, 'Sending your request…');
+  api('signup', { name: name, email: email, store: $('suStore').value, dept: $('suDept').value })
+    .then(function (res) {
+      busy(false);
+      $('lgEmail').value = email;
+      showLogin();
+      toast(res.msg || 'Request sent! Watch your email.');
+    }).catch(function (err) {
+      busy(false);
+      toast((err && err.message) || String(err), true);
+    });
 }
 function forgotPin() {
   appPrompt('Type your email — a new PIN will be sent to it:', $('lgEmail').value.trim(), 'text', function (v) {
