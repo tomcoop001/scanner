@@ -138,7 +138,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v14</p>
+      <p class="catline">Charley Family Shop 'n Save · v16</p>
     </div>
   </div>
 
@@ -269,13 +269,14 @@
       <p class="desc" id="iDesc"></p>
       <span class="dept" id="iDept"></span>
       <div class="upcline" id="iCodeLine"></div>
+      <p class="catline" id="iLbLine" style="display:none;text-align:left"></p>
       <div id="iNewWrap" style="display:none">
         <label for="ivDept">Department</label>
         <select id="ivDept"></select>
         <label for="ivDesc">Brief description</label>
         <input type="text" id="ivDesc" placeholder="e.g. 80/20 Ground Beef 1lb">
       </div>
-      <div class="vline" id="iValue"></div>
+      <div class="vline" id="iValue" onclick="editValue()" style="cursor:pointer"></div>
       <label id="iQtyLabel" for="iQty">How many?</label>
       <input type="tel" id="iQty" inputmode="decimal" placeholder="0"
              style="font-size:26px;font-weight:bold;text-align:center"
@@ -1534,17 +1535,23 @@ function invLookup(upc) {
   if (hit) {
     current = { inv: true, found: true, key: String(hit.item[0]), scanned: String(upc),
                 description: String(hit.item[1]), department: String(hit.item[2] || ''),
-                retail: hit.item[3], code: hit.code, cost: hit.cost };
-    // scale-code package: the price printed into the barcode wins
+                retail: hit.item[3], code: hit.code, cost: hit.cost,
+                bylb: bylbFor(hit.item), scalePkg: false };
+    // scale-code package: the price printed into the barcode wins, and it's
+    // a PACKAGE price — count packages, not pounds, on these scans
     var sp = scalePrice_(upc);
-    if (sp !== null && String(current.key).slice(-5) === '00000') current.retail = sp;
+    if (sp !== null && String(current.key).slice(-5) === '00000') {
+      current.retail = sp;
+      current.scalePkg = true;
+    }
     $('iDesc').textContent = current.description;
     $('iDept').textContent = current.department || 'No department yet';
     $('iCodeLine').textContent = hit.code ? ('Case/order code ' + hit.code + ' → item ' + current.key)
                                           : ('UPC: ' + current.key);
   } else {
     current = { inv: true, found: false, key: normUpc(upc) || String(upc), scanned: String(upc),
-                description: '', department: '', retail: '', code: null, cost: null };
+                description: '', department: '', retail: '', code: null, cost: null,
+                bylb: false, scalePkg: false };
     $('iDesc').textContent = 'Item not on file';
     $('iDept').textContent = 'new item';
     $('iCodeLine').textContent = 'Code: ' + current.key;
@@ -1552,18 +1559,108 @@ function invLookup(upc) {
     $('ivDesc').value = '';
     $('ivDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
   }
-  var v = invValue_();
-  if (INVAREA === 'back') {
-    $('iValue').innerHTML = (v === '') ? '<span style="color:#c82018">No case cost on file — will count without $</span>'
-                                       : 'Case cost: $' + v.toFixed(2);
-    $('iQtyLabel').textContent = 'How many CASES?';
-  } else {
-    $('iValue').innerHTML = (v === '') ? '<span style="color:#c82018">No retail on file — will count without $</span>'
-                                       : 'Retail: $' + v.toFixed(2) + ' each';
-    $('iQtyLabel').textContent = 'How many (units on the floor)?';
-  }
+  renderInvValue();
   show('view-invitem');
   setTimeout(function () { try { $('iQty').focus(); } catch (e) {} }, 60);
+}
+/* by-the-pound rules: an explicit Y/N on the item always wins; otherwise
+   PLU and scale-base-code items in Produce, Deli, and Meat weigh by default */
+function bylbFor(item) {
+  var flag = String(item[4] || '');
+  if (flag === 'Y') return true;
+  if (flag === 'N') return false;
+  var dept = String(item[2] || '');
+  if (dept !== 'Produce' && dept !== 'Deli' && dept !== 'Meat') return false;
+  var key = normUpc(item[0]);
+  var isPLU = key.length > 0 && key.length <= 5;
+  var isScaleBase = key.length === 11 && key.charAt(0) === '2' && key.slice(-5) === '00000';
+  return isPLU || isScaleBase;
+}
+/* the price line + quantity label — re-drawn after edits and lb toggles */
+function renderInvValue() {
+  var v = invValue_();
+  var edit = ' <span style="font-size:13px;text-decoration:underline;color:#2557a7">&#9998; tap to change</span>';
+  if (INVAREA === 'back') {
+    $('iValue').innerHTML = (v === '')
+      ? '<span style="color:#c82018">No case cost on file — tap here to add it</span>'
+      : 'Case cost: ' + fm(v) + edit;
+    $('iQtyLabel').textContent = 'How many CASES?';
+  } else if (current.scalePkg) {
+    // a wrapped scale package: its barcode carries this package's exact price
+    $('iValue').innerHTML = 'Package price: ' + fm(v) + ' (from the barcode)';
+    $('iQtyLabel').textContent = 'How many packages at this exact price?';
+    if (!$('iQty').value) $('iQty').value = '1';
+  } else {
+    $('iValue').innerHTML = (v === '')
+      ? '<span style="color:#c82018">No retail on file — tap here to add it</span>'
+      : 'Retail: ' + fm(v) + (current.bylb ? ' per lb' : ' each') + edit;
+    $('iQtyLabel').textContent = current.bylb ? 'How many POUNDS? (weight — decimals OK)' : 'How many (units on the floor)?';
+  }
+  var lb = $('iLbLine');
+  if (INVAREA === 'floor' && current.found && !current.scalePkg) {
+    lb.style.display = 'block';
+    lb.innerHTML = current.bylb
+      ? '&#9878;&#65039; Sold by the LB &nbsp;<button class="linklike" onclick="toggleLb()">change to by-the-unit</button>'
+      : '<button class="linklike" onclick="toggleLb()">&#9878;&#65039; This item sells BY THE LB — tap to set</button>';
+  } else {
+    lb.style.display = 'none';
+  }
+}
+/* tap the price: add it if missing, or confirm-then-correct it — the fix
+   writes back to the master pricing data for all stores */
+function editValue() {
+  if (!current || !current.inv) return;
+  if (INVAREA === 'back') {
+    if (!current.code) { toast('Scan the CASE or ORDER barcode to set a case cost', true); return; }
+    var curC = (current.cost === '' || current.cost === null || current.cost === undefined) ? '' : Number(current.cost).toFixed(2);
+    if (curC !== '' && !confirm('Change this case cost for everyone?')) return;
+    var v = prompt('Case cost ($):', curC);
+    if (v === null) return;
+    var n = Number(String(v).replace(/[^0-9.]/g, ''));
+    if (!(n > 0)) { toast('That doesn\'t look like an amount', true); return; }
+    n = Math.round(n * 100) / 100;
+    current.cost = n;
+    var e = CATALOG.codeMap && CATALOG.codeMap[current.code];
+    if (e) {
+      e.c = n;
+      for (var i = 0; i < CATALOG.codes.length; i++) {
+        if (normUpc(CATALOG.codes[i][0]) === current.code) { CATALOG.codes[i][2] = n; break; }
+      }
+      persistCatalog();
+    }
+    enqueue({ action: 'priceSet', data: { code: current.code, cost: n } });
+    renderInvValue();
+    toast('Case cost saved for everyone: ' + fm(n));
+  } else {
+    if (!current.found) { toast('Save the item first, then set its price on the next scan', true); return; }
+    var curR = (current.retail === '' || current.retail === null || current.retail === undefined) ? '' : Number(current.retail).toFixed(2);
+    if (curR !== '' && !confirm('Change this price for everyone?')) return;
+    var v2 = prompt(current.bylb ? 'Retail per POUND ($):' : 'Retail each ($):', curR);
+    if (v2 === null) return;
+    var n2 = Number(String(v2).replace(/[^0-9.]/g, ''));
+    if (!(n2 > 0)) { toast('That doesn\'t look like an amount', true); return; }
+    n2 = Math.round(n2 * 100) / 100;
+    current.retail = n2;
+    var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
+    if (entry) { entry[3] = n2; persistCatalog(); }
+    enqueue({ action: 'priceSet', data: { upc: current.key, retail: n2 } });
+    renderInvValue();
+    toast('Price saved for everyone: ' + fm(n2));
+  }
+}
+/* the one-tap "sold by the pound" switch — remembered forever, everywhere */
+function toggleLb() {
+  var to = !current.bylb;
+  if (!confirm(to
+      ? 'Mark this item as sold BY THE POUND? Counts become weights (e.g. 8.4 lbs) and the price is per lb.'
+      : 'Change this item to by-the-unit counting?')) return;
+  current.bylb = to;
+  // explicit Y or N — an override that outranks the department assumption
+  var entry = CATALOG.map && CATALOG.map[normUpc(current.key)];
+  if (entry) { entry[4] = to ? 'Y' : 'N'; persistCatalog(); }
+  enqueue({ action: 'priceSet', data: { upc: current.key, bylb: to ? 'Y' : 'N' } });
+  renderInvValue();
+  toast(to ? 'Saved — this item now counts by the pound, for everyone' : 'Saved — this item counts by the unit, for everyone');
 }
 function invValue_() {
   var v = (INVAREA === 'back') ? current.cost : current.retail;
