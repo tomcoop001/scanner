@@ -81,9 +81,15 @@
   .loginlogo { text-align: center; font-size: 40px; margin: 20px 0 0; }
   .loginnote { text-align: center; color: #666; font-size: 14px; margin-top: 10px; }
 
-  #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.8);
-             z-index: 50; align-items: center; justify-content: center; font-size: 19px; font-weight: bold;
-             color: #c82018; text-align: center; padding: 20px; }
+  #overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.85);
+             z-index: 50; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+  #ovmsg { font-size: 19px; font-weight: bold; color: #c82018; }
+  .pbar { width: 260px; max-width: 80vw; height: 14px; background: #e4e7eb; border-radius: 8px;
+          overflow: hidden; margin: 14px auto 8px; }
+  .pfill { height: 100%; background: #c82018; width: 0%; border-radius: 8px; transition: width .25s; }
+  .pfill.indet { width: 35%; transition: none; animation: pslide 1.2s infinite ease-in-out; }
+  @keyframes pslide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  #ovdetail, #ovelapsed { font-size: 14px; color: #666; margin-top: 2px; }
   #toast { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 30px;
            background: #1a7f37; color: #fff; padding: 14px 22px; border-radius: 12px; font-size: 17px;
            z-index: 60; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-width: 90%; text-align: center; }
@@ -132,7 +138,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v12</p>
+      <p class="catline">Charley Family Shop 'n Save · v14</p>
     </div>
   </div>
 
@@ -161,6 +167,7 @@
       <button class="areabtn" onclick="openTrans()">&#128257; TRANSFERS</button>
       <button class="areabtn" onclick="openSales()">&#128200; SALES</button>
     </div>
+    <button class="bigbtn expbtn" onclick="openInvReview()">&#129534; REVIEW COUNTS SO FAR</button>
     <button class="bigbtn save" onclick="finalizeInv()">&#128221; FINALIZE INVENTORY</button>
     <p class="catline" id="invtally"></p>
     <p class="catline" id="invlast"></p>
@@ -180,8 +187,15 @@
     </div>
     <p class="catline" id="sessline"></p>
     <p class="catline" id="sesslast"></p>
+    <p class="catline"><button class="linklike" onclick="openInvReview()">&#129534; review all counts so far</button></p>
     <button class="bigbtn save" onclick="submitArea()">&#10003; &nbsp;SUBMIT <span id="submitAreaName"></span></button>
     <button class="bigbtn cancel" onclick="exitArea()">&#8592; &nbsp;Back (finish this area later)</button>
+  </div>
+
+  <!-- INVENTORY REVIEW (everything logged so far) -->
+  <div id="view-invreview" class="view">
+    <div id="invreviewList"></div>
+    <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Back</button>
   </div>
 
   <!-- PURCHASES / CREDITS ENTRY -->
@@ -349,7 +363,14 @@
 
 </div>
 
-<div id="overlay">Working&hellip;</div>
+<div id="overlay">
+  <div>
+    <div id="ovmsg">Working&hellip;</div>
+    <div class="pbar"><div id="pfill" class="pfill indet"></div></div>
+    <div id="ovdetail"></div>
+    <div id="ovelapsed"></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -487,22 +508,49 @@ function updateCatLine() {
   var codesTxt = CATALOG.codes.length ? ' + ' + CATALOG.codes.length.toLocaleString() + ' case/order codes' : '';
   el.textContent = CATALOG.list.length.toLocaleString() + ' items' + codesTxt + ' on this device' + (when ? ' · updated ' + when : '');
 }
-/* Download the item list. blocking=true shows the overlay (first run only). */
+/* Download the item list, with real progress. blocking=true shows the overlay. */
+var catRefreshing = false;
 function refreshCatalog(force, blocking) {
-  if (!API_URL || !AUTH) return;
+  if (!API_URL || !AUTH || catRefreshing) return;
   if (!force && CATALOG.list.length && (Date.now() - CATALOG.at) < CATALOG_MAX_AGE) return;
-  if (blocking) busy(true, 'Setting up this device — downloading the item list (one time)…');
-  api('items').then(function (res) {
+  catRefreshing = true;
+  var lastSize = 0, gotBytes = 0;
+  try { lastSize = Number(localStorage.getItem('slt_catsize')) || 0; } catch (e) {}
+  if (blocking) busy(true, 'Downloading the item list to this device…');
+  function onBytes(bytes, done) {
+    gotBytes = bytes;
+    var mb = (bytes / 1048576).toFixed(1) + ' MB';
+    var frac = lastSize ? Math.min(bytes / lastSize, 0.99) : null;
+    if (done) {
+      if (blocking) busyProg(0.99, 'Unpacking…');
+      return;
+    }
+    if (blocking) {
+      busyProg(frac, frac !== null
+        ? Math.round(frac * 100) + '% — ' + mb + ' of ~' + (lastSize / 1048576).toFixed(1) + ' MB'
+        : mb + ' received…');
+    } else {
+      var el = $('catline');
+      if (el) el.textContent = 'Updating item list… ' +
+        (frac !== null ? Math.round(frac * 100) + '%' : mb);
+    }
+  }
+  apiStream('items', {}, onBytes).then(function (res) {
     CATALOG.list = res.items || [];
     CATALOG.codes = res.codes || [];
     CATALOG.vendors = res.vendors || [];
     CATALOG.at = Date.now();
+    if (blocking) busyProg(1, 'Saving to this device…');
     buildMap();
     persistCatalog();
+    try { localStorage.setItem('slt_catsize', String(gotBytes)); } catch (e) {}
     updateCatLine();
+    catRefreshing = false;
     if (blocking) busy(false);
-    if (force && !blocking) toast('Item list updated — ' + CATALOG.list.length.toLocaleString() + ' items');
+    if (force) toast('Item list updated — ' + CATALOG.list.length.toLocaleString() + ' items');
   }).catch(function (err) {
+    catRefreshing = false;
+    updateCatLine();
     if (blocking) busy(false);
     if (force) toast('Could not update the item list: ' + ((err && err.message) || err), true);
   });
@@ -661,6 +709,40 @@ function discardFailed() {
 }
 
 /* ================= talk to the Google Sheet backend ==================== */
+/* like api(), but reports download progress byte by byte (for the big catalog) */
+function apiStream(action, data, onBytes) {
+  function unwrap(res) {
+    if (!res.ok) {
+      var e = new Error(res.error || 'Something went wrong');
+      e.permanent = (res.permanent === true);
+      throw e;
+    }
+    return res.result;
+  }
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: action, data: data || {}, auth: AUTH })
+  }).then(function (r) {
+    if (!r.ok) throw new Error('Connection problem (HTTP ' + r.status + ')');
+    if (!r.body || !r.body.getReader) return r.json().then(unwrap);
+    var reader = r.body.getReader();
+    var chunks = [], got = 0;
+    function pumpRead() {
+      return reader.read().then(function (res) {
+        if (res.done) {
+          if (onBytes) onBytes(got, true);   // download finished — unpacking now
+          return new Blob(chunks).text().then(function (t) { return unwrap(JSON.parse(t)); });
+        }
+        chunks.push(res.value);
+        got += res.value.length;
+        if (onBytes) onBytes(got, false);
+        return pumpRead();
+      });
+    }
+    return pumpRead();
+  });
+}
 function api(action, data, authOverride) {
   return fetch(API_URL, {
     method: 'POST',
@@ -686,7 +768,8 @@ function $(id) { return document.getElementById(id); }
 var lastShown = null;
 function showRaw(id) {
   ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invcount',
-   'view-invitem', 'view-txn', 'view-sales', 'view-trans', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+   'view-invitem', 'view-invreview', 'view-txn', 'view-sales', 'view-trans', 'view-scan',
+   'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
   lastShown = id;
@@ -720,10 +803,38 @@ window.addEventListener('beforeunload', function (e) {
     return '';
   }
 });
+var busyTimer = null, busyStart = 0;
 function busy(on, msg) {
   var o = $('overlay');
-  o.textContent = msg || 'Working…';
   o.style.display = on ? 'flex' : 'none';
+  if (on) {
+    $('ovmsg').textContent = msg || 'Working…';
+    $('ovdetail').textContent = '';
+    $('ovelapsed').textContent = '';
+    busyProg(null);
+    busyStart = Date.now();
+    clearInterval(busyTimer);
+    busyTimer = setInterval(function () {
+      var s = Math.round((Date.now() - busyStart) / 1000);
+      if (s >= 3) {
+        $('ovelapsed').textContent = s + 's' + (s > 15 ? ' — still working, hang tight' : '');
+      }
+    }, 1000);
+  } else {
+    clearInterval(busyTimer);
+  }
+}
+/* progress bar inside the overlay: frac 0..1, or null for the moving shimmer */
+function busyProg(frac, detail) {
+  var f = $('pfill');
+  if (frac === null || frac === undefined) {
+    f.className = 'pfill indet';
+    f.style.width = '35%';
+  } else {
+    f.className = 'pfill';
+    f.style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%';
+  }
+  if (detail !== undefined) $('ovdetail').textContent = detail;
 }
 function toast(msg, bad) {
   var t = $('toast');
@@ -880,6 +991,29 @@ function updateSessLine() {
   $('sessline').textContent = 'This session: ' + SESS.n + ' count(s)' +
     (SESS.amt ? ' · $' + SESS.amt.toFixed(2) : '');
 }
+/* the "review counts so far" screen — newest scan first, floor and back apart */
+function openInvReview() {
+  busy(true, 'Loading your counts…');
+  api('invList', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+    busy(false);
+    function section(title, rows, total) {
+      var h = '<div class="grp"><h3>' + title + ' — ' + rows.length + ' scan(s) · ' + fm(total) + '</h3>';
+      if (!rows.length) h += '<div class="empty">Nothing counted yet.</div>';
+      rows.slice().reverse().forEach(function (r) {
+        h += '<div class="exprow"><div class="d">' + r.qty + ' × ' + escp(r.desc) +
+             (r.ext === '' ? '' : ' — ' + fm(r.ext)) + '</div>' +
+             '<div class="m">' + escp(r.when) + '</div></div>';
+      });
+      return h + '</div>';
+    }
+    $('invreviewList').innerHTML =
+      '<p class="catline">Newest first — the top line of each section is where you left off.</p>' +
+      section('&#128722; Sales Floor', res.floor, res.floorTotal) +
+      section('&#128230; Back Room', res.back, res.backTotal);
+    show('view-invreview');
+  }).catch(fail);
+}
+
 function finalizeInv() {
   var s = subLoad();
   if (!(s.f && s.b)) {
@@ -891,7 +1025,27 @@ function finalizeInv() {
     pump();
     return;
   }
-  if (!confirm('Are you sure you have completed scanning ALL of your department — Sales Floor AND Back Room?')) return;
+  // show exactly what's about to be finalized, and ask properly
+  busy(true, 'Adding up your inventory…');
+  api('invList', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+    busy(false);
+    var h = '<div class="card"><p style="font-size:20px;font-weight:bold;margin:0 0 8px">Finalize inventory?</p>' +
+      '<div class="exprow"><div class="d">&#128722; Sales Floor: ' + res.floor.length + ' scan(s) — ' + fm(res.floorTotal) + ' at retail</div></div>' +
+      '<div class="exprow"><div class="d">&#128230; Back Room: ' + res.back.length + ' scan(s) — ' + fm(res.backTotal) + ' at cost</div></div>' +
+      '<p style="font-size:15px;color:#555;margin:10px 0">Are you SURE you have completed scanning ALL of your department — ' +
+      'Sales Floor AND Back Room? This emails the complete inventory to your manager.</p>' +
+      '<button class="bigbtn save" onclick="doFinalize()">&#10003; &nbsp;YES — FINALIZE &amp; EMAIL IT</button>' +
+      '<button class="bigbtn cancel" onclick="closeSyncPanel()">NOT YET — keep counting</button></div>';
+    var p = document.createElement('div');
+    p.id = 'syncpanel';
+    p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:70;overflow:auto;padding:30px 16px';
+    p.innerHTML = '<div style="max-width:480px;margin:0 auto">' + h + '</div>';
+    closeSyncPanel();
+    document.body.appendChild(p);
+  }).catch(fail);
+}
+function doFinalize() {
+  closeSyncPanel();
   busy(true, 'Finalizing your inventory and emailing it…');
   api('invFinalize', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
     busy(false);
