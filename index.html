@@ -146,7 +146,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v20</p>
+      <p class="catline">Charley Family Shop 'n Save · v21</p>
     </div>
   </div>
 
@@ -1178,7 +1178,7 @@ function doFinalize() {
     paintInvMenu();
     try { localStorage.removeItem('slt_invtally'); } catch (e) {}
     updateTallyLine();
-    toast('Inventory finalized — $' + Number(res.total).toFixed(2) + ' emailed to ' + (res.email || 'the manager'));
+    toast('Inventory finalized — $' + Number(res.total).toFixed(2) + ' emailed to ' + (res.email || 'the manager') + '. Your period is closed; a fresh one starts now.');
   }).catch(fail);
 }
 /* this device's running count tally (the sheet's Inv Summary is the real total) */
