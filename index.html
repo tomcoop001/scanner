@@ -132,7 +132,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v10</p>
+      <p class="catline">Charley Family Shop 'n Save · v11</p>
     </div>
   </div>
 
@@ -155,6 +155,7 @@
       <span id="subBack" style="display:none;font-size:14px;background:#fff;color:#1a7f37;border-radius:8px;padding:2px 10px;margin-top:4px">&#10003; SUBMITTED</span></button>
     <button class="bigbtn save" onclick="finalizeInv()">&#128221; FINALIZE INVENTORY</button>
     <p class="catline" id="invtally"></p>
+    <p class="catline" id="invlast"></p>
     <p class="catline"><button class="linklike" onclick="zeroTally()">zero this device's tally</button> &middot;
        <button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
   </div>
@@ -170,6 +171,7 @@
       <button class="bigbtn expbtn" style="font-size:18px;padding:14px;margin-bottom:0" onclick="invManualGo()">Look Up</button>
     </div>
     <p class="catline" id="sessline"></p>
+    <p class="catline" id="sesslast"></p>
     <button class="bigbtn save" onclick="submitArea()">&#10003; &nbsp;SUBMIT <span id="submitAreaName"></span></button>
     <button class="bigbtn cancel" onclick="exitArea()">&#8592; &nbsp;Back (finish this area later)</button>
   </div>
@@ -210,6 +212,7 @@
       <button class="linklike" onclick="refreshCatalog(true)">Update item list</button></p>
     <p class="catline" id="syncline"></p>
     <p class="catline" id="countline"></p>
+    <p class="catline" id="lastline"></p>
     <p class="catline"><button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
   </div>
 
@@ -605,12 +608,43 @@ function api(action, data, authOverride) {
 
 /* ================= helpers ============================================= */
 function $(id) { return document.getElementById(id); }
-function show(id) {
+var lastShown = null;
+function showRaw(id) {
   ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invcount',
    'view-invitem', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
+  lastShown = id;
 }
+function show(id) {
+  if (id !== lastShown) {
+    try {
+      if (lastShown === null) history.replaceState({ v: id }, '');
+      else history.pushState({ v: id }, '');
+    } catch (e) {}
+  }
+  showRaw(id);
+}
+/* The phone's BACK button walks back through the app's screens instead of
+   leaving the page — no more accidentally backing out mid-inventory. */
+window.onpopstate = function (ev) {
+  var v = ev.state && ev.state.v;
+  stopScan(false);
+  if (!v || !document.getElementById(v) || v === 'view-scan') v = homeView();
+  if (!AUTH && v !== 'view-connect' && v !== 'view-login') v = API_URL ? 'view-login' : 'view-connect';
+  if (v !== 'view-invcount' && v !== 'view-invitem') INVSESSION = false;
+  if (v === 'view-invcount') INVSESSION = true;
+  if (v === 'view-invhome') paintInvMenu();
+  showRaw(v);
+};
+/* Truly leaving the page mid-count or with unsynced saves gets a warning */
+window.addEventListener('beforeunload', function (e) {
+  if (INVSESSION || QUEUE.length) {
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
+});
 function busy(on, msg) {
   var o = $('overlay');
   o.textContent = msg || 'Working…';
@@ -711,6 +745,13 @@ function pickMode(m) {
   INVSESSION = false;
   setHeader();
   if (m === 'inv') {
+    var sess = sessSaved();
+    if (sess) {
+      // they were mid-count when the page closed — put them right back
+      enterArea(sess.a);
+      toast('Resumed your ' + areaName() + ' count — nothing was lost.');
+      return;
+    }
     paintInvMenu();
     show('view-invhome');
   } else {
@@ -722,13 +763,16 @@ function enterArea(a) {
   INVAREA = (a === 'back') ? 'back' : 'floor';
   INVSESSION = true;
   SESS = { n: 0, amt: 0 };
+  sessPersist();
   $('areaTitle').innerHTML = (INVAREA === 'back' ? '&#128230; BACK ROOM — cases @ landed cost' : '&#128722; SALES FLOOR — each item @ retail');
   $('submitAreaName').textContent = areaName();
   updateSessLine();
+  updateLastLines();
   show('view-invcount');
 }
 function exitArea() {
   INVSESSION = false;
+  sessClear();
   stopScan(false);
   paintInvMenu();
   show('view-invhome');
@@ -739,6 +783,7 @@ function submitArea() {
   if (INVAREA === 'back') s.b = true; else s.f = true;
   subSave(s);
   INVSESSION = false;
+  sessClear();
   paintInvMenu();
   show('view-invhome');
   toast(areaName() + ' submitted ✓');
@@ -776,6 +821,7 @@ function finalizeInv() {
   api('invFinalize', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
     busy(false);
     subSave({ f: false, b: false });
+    sessClear();
     paintInvMenu();
     try { localStorage.removeItem('slt_invtally'); } catch (e) {}
     updateTallyLine();
@@ -805,8 +851,47 @@ function zeroTally() {
   updateTallyLine();
   toast('Device tally zeroed');
 }
+
+/* ---- "where you left off" — the last save on this device ------------- */
+function noteLast(what) {
+  try { localStorage.setItem('slt_last', JSON.stringify({ w: what, at: Date.now() })); } catch (e) {}
+  updateLastLines();
+}
+function lastText() {
+  var o = null;
+  try { o = JSON.parse(localStorage.getItem('slt_last')); } catch (e) {}
+  if (!o || !o.w) return '';
+  var d = new Date(o.at);
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var when = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (d.getTime() < today.getTime()) {
+    when = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' + when;
+  }
+  return 'Last saved: ' + o.w + ' · ' + when;
+}
+function updateLastLines() {
+  var t = lastText();
+  ['lastline', 'invlast', 'sesslast'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.textContent = t;
+  });
+}
+
+/* ---- interrupted counting sessions resume where they left off -------- */
+function sessPersist() {
+  try { localStorage.setItem('slt_invsess', JSON.stringify({ a: INVAREA, k: subKey() })); } catch (e) {}
+}
+function sessClear() {
+  try { localStorage.removeItem('slt_invsess'); } catch (e) {}
+}
+function sessSaved() {
+  try {
+    var o = JSON.parse(localStorage.getItem('slt_invsess'));
+    return (o && o.k === subKey()) ? o : null;
+  } catch (e) { return null; }
+}
 function showLogin() { setHeader(); show('view-login'); }
-function logout() { stopScan(false); clearAuth(); $('lgPin').value = ''; showLogin(); }
+function logout() { stopScan(false); INVSESSION = false; sessClear(); clearAuth(); $('lgPin').value = ''; showLogin(); }
 
 function doLogin() {
   var attempt = { store: $('lgStore').value, dept: $('lgDept').value, pin: $('lgPin').value.trim() };
@@ -874,6 +959,7 @@ window.onload = function () {
   ed.min = iso(todayPlus(-60));
   ed.max = iso(todayPlus(1095));
   updateCountLine();
+  updateLastLines();
 
   loadApi();
   loadQueue();
@@ -1173,6 +1259,7 @@ function save() {
   lastSavedAt = savedAtGuard;
   enqueue({ action: 'save', data: payload });
   bumpCount();
+  noteLast(payload.description + ' (shelf life)');
 
   // 3. confirm and go straight to the next scan
   var p = payload.expDate.split('-');
@@ -1286,6 +1373,7 @@ function saveInv() {
   SESS.n++;
   if (v !== '') SESS.amt += Math.round(qty * v * 100) / 100;
   updateSessLine();
+  noteLast(qty + ' × ' + desc + ' (' + areaName() + ')');
   var ext = (v === '') ? '' : ' ($' + (Math.round(qty * v * 100) / 100).toFixed(2) + ')';
   toast('Counted ' + qty + (INVAREA === 'back' ? ' case(s)' : '') + ': ' + desc + ext);
   nextAfterItem();
