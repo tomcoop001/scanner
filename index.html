@@ -42,6 +42,11 @@
   input[type=text], input[type=date], input[type=tel], input[type=password], input[type=url], select {
     width: 100%; padding: 14px; font-size: 18px; border: 2px solid #ccc; border-radius: 10px; background: #fff; }
 
+  .areabtn { flex: 1; padding: 14px 8px; font-size: 17px; font-weight: bold; border: 3px solid #c82018;
+             background: #fff; color: #c82018; border-radius: 12px; cursor: pointer; text-align: center; }
+  .areabtn.sel { background: #c82018; color: #fff; }
+  .areabtn small { font-weight: normal; font-size: 12px; display: block; margin-top: 2px; }
+  .vline { font-size: 18px; font-weight: bold; margin: 8px 0 2px; color: #1a7f37; }
   .datewrap { position: relative; margin-top: 4px; }
   .datewrap input[type=date] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
   .datebtn { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 20px 14px;
@@ -127,7 +132,58 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v8</p>
+      <p class="catline">Charley Family Shop 'n Save · v9</p>
+    </div>
+  </div>
+
+  <!-- PROGRAM CHOOSER -->
+  <div id="view-mode" class="view">
+    <div class="logoimg biglogo"></div>
+    <button class="bigbtn scanbtn" onclick="pickMode('shrink')">&#127991; SHRINK PROGRAM<br>
+      <small style="font-weight:normal;font-size:14px">shelf life &amp; markdowns</small></button>
+    <button class="bigbtn expbtn" onclick="pickMode('inv')">&#128203; INVENTORY<br>
+      <small style="font-weight:normal;font-size:14px">count the store</small></button>
+  </div>
+
+  <!-- INVENTORY HOME -->
+  <div id="view-invhome" class="view">
+    <div class="card" style="padding:12px">
+      <div style="display:flex;gap:8px">
+        <button class="areabtn" id="areaFloor" onclick="setArea('floor')">&#128722; SALES FLOOR<small>each item @ retail</small></button>
+        <button class="areabtn" id="areaBack" onclick="setArea('back')">&#128230; BACK ROOM<small>cases @ landed cost</small></button>
+      </div>
+    </div>
+    <button class="bigbtn scanbtn" onclick="startScan()">&#128247; &nbsp;SCAN TO COUNT</button>
+    <div class="card">
+      <label for="iManual">Or type / scan-gun a UPC, case, or order code:</label>
+      <input type="tel" id="iManual" placeholder="Any code" inputmode="numeric"
+             onkeydown="if(event.key==='Enter'){invManualGo()}">
+      <button class="bigbtn expbtn" style="font-size:18px;padding:14px;margin-bottom:0" onclick="invManualGo()">Look Up</button>
+    </div>
+    <p class="catline" id="invtally"></p>
+    <p class="catline"><button class="linklike" onclick="zeroTally()">zero this device's tally</button> &middot;
+       <button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
+  </div>
+
+  <!-- INVENTORY ITEM / QUANTITY -->
+  <div id="view-invitem" class="view">
+    <div class="card">
+      <p class="desc" id="iDesc"></p>
+      <span class="dept" id="iDept"></span>
+      <div class="upcline" id="iCodeLine"></div>
+      <div id="iNewWrap" style="display:none">
+        <label for="ivDept">Department</label>
+        <select id="ivDept"></select>
+        <label for="ivDesc">Brief description</label>
+        <input type="text" id="ivDesc" placeholder="e.g. 80/20 Ground Beef 1lb">
+      </div>
+      <div class="vline" id="iValue"></div>
+      <label id="iQtyLabel" for="iQty">How many?</label>
+      <input type="tel" id="iQty" inputmode="decimal" placeholder="0"
+             style="font-size:26px;font-weight:bold;text-align:center"
+             onkeydown="if(event.key==='Enter'){saveInv()}">
+      <button class="bigbtn save" onclick="saveInv()">&#10003; &nbsp;SAVE COUNT</button>
+      <button class="bigbtn cancel" onclick="cancelItem()">Cancel</button>
     </div>
   </div>
 
@@ -145,6 +201,7 @@
       <button class="linklike" onclick="refreshCatalog(true)">Update item list</button></p>
     <p class="catline" id="syncline"></p>
     <p class="catline" id="countline"></p>
+    <p class="catline"><button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
   </div>
 
   <!-- SCANNER -->
@@ -218,6 +275,8 @@ var departments = [];
 var current = null;       // item currently being saved
 var scanner = null;
 var lastEntry = 'manual'; // 'camera' or 'manual' — decides where SAVE returns to
+var APPMODE = 'shrink';   // 'shrink' or 'inv' — which program is open
+var INVAREA = 'floor';    // 'floor' (each @ retail) or 'back' (cases @ cost)
 var SHRINK_DAYS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 21, 30, 45, 60, 90];
 var ALL = 'ALL';
 
@@ -268,7 +327,22 @@ function upcCandidates_(scanned) {
   if (digits.replace(/^0+/, '').length >= 11) add(digits.substring(0, digits.length - 1));
   var e = expandUpcE_(digits);
   if (e) { add(e); add(e.substring(0, e.length - 1)); }
+  // in-store scale barcodes (start with 2, price embedded): match the item
+  // by zeroing out the price digits
+  var s = digits;
+  if (s.length === 13 && s.charAt(0) === '0') s = s.substring(1);
+  if (s.length === 12 && s.charAt(0) === '2') add(s.substring(0, 6) + '00000');
   return list;
+}
+/* read the price embedded in an in-store scale barcode ("2" system) */
+function scalePrice_(scanned) {
+  var d = String(scanned).replace(/\D/g, '');
+  if (d.length === 13 && d.charAt(0) === '0') d = d.substring(1);
+  if (d.length === 12 && d.charAt(0) === '2') {
+    var cents = Number(d.substring(6, 11));
+    if (!isNaN(cents) && cents > 0) return Math.round(cents) / 100;
+  }
+  return null;
 }
 function expandUpcE_(digits) {
   var d = String(digits || '');
@@ -292,7 +366,8 @@ function buildMap() {
   }
   CATALOG.codeMap = {};
   for (var j = 0; j < CATALOG.codes.length; j++) {
-    CATALOG.codeMap[normUpc(CATALOG.codes[j][0])] = String(CATALOG.codes[j][1]);
+    var cc = CATALOG.codes[j];
+    CATALOG.codeMap[normUpc(cc[0])] = { t: String(cc[1]), c: (cc[2] === '' || cc[2] === null || cc[2] === undefined) ? '' : Number(cc[2]) };
   }
 }
 function loadCatalog() {
@@ -346,20 +421,25 @@ function refreshCatalog(force, blocking) {
   });
 }
 /* Instant local lookup — item barcodes first, then the case-UPC /
-   order-code cross-reference, all with the same matching rules */
-function localFind(scanned) {
+   order-code cross-reference, all with the same matching rules.
+   Returns {item, code, cost} so inventory knows which case was scanned. */
+function localFindFull(scanned) {
   if (!CATALOG.map) return null;
   var cands = upcCandidates_(scanned);
   for (var i = 0; i < cands.length; i++) {
-    if (CATALOG.map[cands[i]]) return CATALOG.map[cands[i]];
+    if (CATALOG.map[cands[i]]) return { item: CATALOG.map[cands[i]], code: null, cost: null };
   }
   if (CATALOG.codeMap) {
     for (var j = 0; j < cands.length; j++) {
-      var target = CATALOG.codeMap[cands[j]];
-      if (target && CATALOG.map[normUpc(target)]) return CATALOG.map[normUpc(target)];
+      var e = CATALOG.codeMap[cands[j]];
+      if (e && CATALOG.map[normUpc(e.t)]) return { item: CATALOG.map[normUpc(e.t)], code: cands[j], cost: e.c };
     }
   }
   return null;
+}
+function localFind(scanned) {
+  var r = localFindFull(scanned);
+  return r ? r.item : null;
 }
 
 /* ================= background save queue (never makes you wait) ======== */
@@ -517,7 +597,8 @@ function api(action, data, authOverride) {
 /* ================= helpers ============================================= */
 function $(id) { return document.getElementById(id); }
 function show(id) {
-  ['view-connect', 'view-login', 'view-home', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+  ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invitem',
+   'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
 }
@@ -602,12 +683,54 @@ function deptLabel(d) { return d === ALL ? 'All Departments' : d; }
 function storeLabel(s) { return s === ALL ? 'All Stores' : s; }
 function setHeader() {
   if (AUTH) {
-    $('hdrsub').textContent = storeLabel(AUTH.store) + ' · ' + deptLabel(AUTH.dept);
+    $('hdrsub').textContent = storeLabel(AUTH.store) + ' · ' + deptLabel(AUTH.dept) +
+                              (APPMODE === 'inv' ? ' · INV' : '');
     $('switchbtn').style.display = 'inline-block';
   } else {
     $('hdrsub').textContent = 'Shelf Life Tracker';
     $('switchbtn').style.display = 'none';
   }
+}
+function homeView() { return APPMODE === 'inv' ? 'view-invhome' : 'view-home'; }
+function pickMode(m) {
+  APPMODE = m;
+  setHeader();
+  if (m === 'inv') {
+    setArea(INVAREA);
+    updateTallyLine();
+    show('view-invhome');
+  } else {
+    show('view-home');
+  }
+}
+function setArea(a) {
+  INVAREA = (a === 'back') ? 'back' : 'floor';
+  try { localStorage.setItem('slt_invarea', INVAREA); } catch (e) {}
+  $('areaFloor').className = 'areabtn' + (INVAREA === 'floor' ? ' sel' : '');
+  $('areaBack').className = 'areabtn' + (INVAREA === 'back' ? ' sel' : '');
+}
+/* this device's running count tally (the sheet's Inv Summary is the real total) */
+function tallyLoad_() {
+  try { return JSON.parse(localStorage.getItem('slt_invtally')) || { f: 0, b: 0, n: 0 }; }
+  catch (e) { return { f: 0, b: 0, n: 0 }; }
+}
+function bumpTally(amount) {
+  var t = tallyLoad_();
+  if (INVAREA === 'back') t.b += amount; else t.f += amount;
+  t.n++;
+  try { localStorage.setItem('slt_invtally', JSON.stringify(t)); } catch (e) {}
+  updateTallyLine();
+}
+function updateTallyLine() {
+  var el = $('invtally');
+  if (!el) return;
+  var t = tallyLoad_();
+  el.textContent = 'This device: ' + t.n + ' count(s) · $' + t.f.toFixed(2) + ' floor · $' + t.b.toFixed(2) + ' back room';
+}
+function zeroTally() {
+  try { localStorage.removeItem('slt_invtally'); } catch (e) {}
+  updateTallyLine();
+  toast('Device tally zeroed');
 }
 function showLogin() { setHeader(); show('view-login'); }
 function logout() { stopScan(false); clearAuth(); $('lgPin').value = ''; showLogin(); }
@@ -623,7 +746,7 @@ function doLogin() {
     setHeader();
     $('lgPin').value = '';
     prefillDepts();
-    show('view-home');
+    show('view-mode');
     // first login on this device: download the item list before scanning starts
     refreshCatalog(false, !CATALOG.list.length);
   }).catch(function (err) {
@@ -633,7 +756,7 @@ function doLogin() {
   });
 }
 function prefillDepts() {
-  if (AUTH && AUTH.dept !== ALL) $('niDept').value = AUTH.dept;
+  if (AUTH && AUTH.dept !== ALL) { $('niDept').value = AUTH.dept; $('ivDept').value = AUTH.dept; }
 }
 
 /* ================= startup ============================================= */
@@ -655,7 +778,7 @@ function applyInit(init) {
   });
   var ob = document.createElement('option'); ob.value = ALL; ob.textContent = 'All Departments (manager)'; lg.appendChild(ob);
 
-  ['niDept', 'kiDept'].forEach(function (id) {
+  ['niDept', 'kiDept', 'ivDept'].forEach(function (id) {
     var sel = $(id);
     sel.innerHTML = '<option value="">-- pick department --</option>';
     departments.forEach(function (d) {
@@ -681,6 +804,7 @@ window.onload = function () {
 
   loadApi();
   loadQueue();
+  try { INVAREA = localStorage.getItem('slt_invarea') || 'floor'; } catch (e) {}
   loadCatalog().then(function () {
   if (!API_URL) { show('view-connect'); return; }
 
@@ -691,7 +815,7 @@ window.onload = function () {
     loadAuth();
     if (AUTH) {
       // go straight in using the saved login; confirm it quietly in the background
-      setHeader(); prefillDepts(); show('view-home');
+      setHeader(); prefillDepts(); show('view-mode');
       refreshCatalog(false, !CATALOG.list.length);
       pump();
       api('login').catch(function () { clearAuth(); showLogin(); });
@@ -704,7 +828,7 @@ window.onload = function () {
     // a catalog and a saved login; queued saves will sync when it's back
     loadAuth();
     if (AUTH && CATALOG.list.length) {
-      setHeader(); prefillDepts(); show('view-home');
+      setHeader(); prefillDepts(); show('view-mode');
       toast('Working offline — saves will sync when the connection is back', true);
     } else {
       toast('Could not reach the tracker: ' + ((err && err.message) || err), true);
@@ -811,11 +935,18 @@ function stopScan(goBack) {
     scanner.stop().then(function () { scanner.clear(); }).catch(function () {});
     scanner = null;
   }
-  if (goBack) show('view-home');
+  if (goBack) show(homeView());
 }
 function manualGo() {
   var v = $('manual').value.replace(/\D/g, '');
   if (!v) { toast('Type a UPC number first', true); return; }
+  lastEntry = 'manual';
+  lookup(v);
+}
+function invManualGo() {
+  var v = $('iManual').value.replace(/\D/g, '');
+  if (!v) { toast('Type a code first', true); return; }
+  $('iManual').value = '';
   lastEntry = 'manual';
   lookup(v);
 }
@@ -828,6 +959,7 @@ function cancelItem() { nextAfterItem(); }
 
 /* ================= lookup & date entry ================================= */
 function lookup(upc) {
+  if (APPMODE === 'inv') { invLookup(upc); return; }
   // INSTANT path: the item list on this device
   if (CATALOG.map && CATALOG.list.length) {
     var hit = localFind(upc);
@@ -998,7 +1130,90 @@ function updateCountLine() {
   el.textContent = n ? (n + ' item' + (n === 1 ? '' : 's') + ' scanned today on this device') : '';
 }
 
-function goHome() { show('view-home'); }
+function goHome() { show(homeView()); }
+
+/* ================= inventory counting ================================== */
+function invLookup(upc) {
+  if (!CATALOG.map || !CATALOG.list.length) {
+    toast('Item list is not on this device yet — tap Update item list first', true);
+    return;
+  }
+  savedAtGuard = 0;
+  var hit = localFindFull(upc);
+  $('iQty').value = '';
+  $('iNewWrap').style.display = 'none';
+  if (hit) {
+    current = { inv: true, found: true, key: String(hit.item[0]), scanned: String(upc),
+                description: String(hit.item[1]), department: String(hit.item[2] || ''),
+                retail: hit.item[3], code: hit.code, cost: hit.cost };
+    // scale-code package: the price printed into the barcode wins
+    var sp = scalePrice_(upc);
+    if (sp !== null && String(current.key).slice(-5) === '00000') current.retail = sp;
+    $('iDesc').textContent = current.description;
+    $('iDept').textContent = current.department || 'No department yet';
+    $('iCodeLine').textContent = hit.code ? ('Case/order code ' + hit.code + ' → item ' + current.key)
+                                          : ('UPC: ' + current.key);
+  } else {
+    current = { inv: true, found: false, key: normUpc(upc) || String(upc), scanned: String(upc),
+                description: '', department: '', retail: '', code: null, cost: null };
+    $('iDesc').textContent = 'Item not on file';
+    $('iDept').textContent = 'new item';
+    $('iCodeLine').textContent = 'Code: ' + current.key;
+    $('iNewWrap').style.display = 'block';
+    $('ivDesc').value = '';
+    $('ivDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
+  }
+  var v = invValue_();
+  if (INVAREA === 'back') {
+    $('iValue').innerHTML = (v === '') ? '<span style="color:#c82018">No case cost on file — will count without $</span>'
+                                       : 'Case cost: $' + v.toFixed(2);
+    $('iQtyLabel').textContent = 'How many CASES?';
+  } else {
+    $('iValue').innerHTML = (v === '') ? '<span style="color:#c82018">No retail on file — will count without $</span>'
+                                       : 'Retail: $' + v.toFixed(2) + ' each';
+    $('iQtyLabel').textContent = 'How many (units on the floor)?';
+  }
+  show('view-invitem');
+  setTimeout(function () { try { $('iQty').focus(); } catch (e) {} }, 60);
+}
+function invValue_() {
+  var v = (INVAREA === 'back') ? current.cost : current.retail;
+  return (v === '' || v === null || v === undefined || isNaN(Number(v))) ? '' : Number(v);
+}
+function saveInv() {
+  if (Date.now() - savedAtGuard < 800) return;
+  if (AUTH && AUTH.store === ALL) {
+    toast("You're logged in as All Stores — tap Switch and log in under one store to count.", true);
+    return;
+  }
+  var qty = Number(String($('iQty').value).replace(',', '.'));
+  if (!(qty > 0)) { toast('Type how many first', true); return; }
+  var isNew = !current.found;
+  var desc = isNew ? $('ivDesc').value.trim() : current.description;
+  var dept = isNew ? $('ivDept').value : (current.department || (AUTH.dept !== ALL ? AUTH.dept : ''));
+  if (isNew && !desc) { toast('Type a brief description', true); return; }
+  if (!dept) { toast('Pick a department', true); return; }
+  var v = invValue_();
+
+  savedAtGuard = Date.now();
+  lastSavedUpc = normUpc(current.scanned);
+  lastSavedAt = savedAtGuard;
+
+  if (isNew) {
+    CATALOG.list.push([current.key, desc, dept, '']);
+    if (CATALOG.map) CATALOG.map[normUpc(current.key)] = CATALOG.list[CATALOG.list.length - 1];
+    persistCatalog();
+  }
+  enqueue({ action: 'inv', data: {
+    area: INVAREA, upc: current.key, codeScanned: current.code || '',
+    description: desc, department: dept, qty: qty,
+    value: v === '' ? '' : v, isNew: isNew
+  } });
+  bumpTally(v === '' ? 0 : qty * v);
+  var ext = (v === '') ? '' : ' ($' + (Math.round(qty * v * 100) / 100).toFixed(2) + ')';
+  toast('Counted ' + qty + (INVAREA === 'back' ? ' case(s)' : '') + ': ' + desc + ext);
+  nextAfterItem();
+}
 
 /* ================= expiring list ======================================= */
 function openExpiring() {
