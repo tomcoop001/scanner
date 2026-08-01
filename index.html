@@ -108,7 +108,7 @@
   <span style="display:flex;align-items:center;gap:8px">
     <span id="syncchip" onclick="showSyncPanel()" style="cursor:pointer"></span>
     <span class="sub" id="hdrsub">Shelf Life Tracker</span>
-    <button class="switch" id="switchbtn" onclick="logout()">Switch</button>
+    <button class="switch" id="switchbtn" onclick="switchScope()">Switch</button>
   </span>
 </header>
 
@@ -131,20 +131,37 @@
   <div id="view-login" class="view">
     <div class="logoimg biglogo"></div>
     <div class="card">
-      <label for="lgStore">Your store</label>
-      <select id="lgStore"></select>
-      <label for="lgDept">Your department</label>
-      <select id="lgDept"></select>
-      <label for="lgPin">Department PIN</label>
-      <input type="password" id="lgPin" inputmode="numeric" placeholder="4-digit PIN"
+      <label for="lgEmail">Your email</label>
+      <input type="text" id="lgEmail" inputmode="email" autocomplete="email" autocapitalize="off"
+             placeholder="you@shopnsave66.com">
+      <label for="lgPin">Your PIN</label>
+      <input type="password" id="lgPin" inputmode="numeric" placeholder="PIN"
              onkeydown="if(event.key==='Enter'){doLogin()}">
       <button class="bigbtn scanbtn" onclick="doLogin()">LOG IN</button>
-      <p class="loginnote">You only see and change your own store's, your own department's items.<br>
-      PINs are in the Settings tab of the tracker sheet — ask the boss.</p>
+      <p style="text-align:center;margin:2px 0 0">
+        <button class="linklike" style="font-size:16px" onclick="forgotPin()">Forgot PIN? — email me a new one</button>
+      </p>
+      <p class="loginnote">You only see the stores and departments you've been given access to.</p>
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v18</p>
+      <p class="catline">Charley Family Shop 'n Save · v19</p>
+    </div>
+  </div>
+
+  <!-- WHERE ARE YOU WORKING (only when you have access to more than one) -->
+  <div id="view-scope" class="view">
+    <div class="logoimg biglogo"></div>
+    <div class="card">
+      <p class="desc">Where are you working?</p>
+      <label for="scStore">Store</label>
+      <select id="scStore" onchange="paintScopeDepts()"></select>
+      <label for="scDept">Department</label>
+      <select id="scDept"></select>
+      <button class="bigbtn scanbtn" onclick="scopeGo()">GO</button>
+      <p style="text-align:center;margin:4px 0 0">
+        <button class="linklike" onclick="logout()">log out</button>
+      </p>
     </div>
   </div>
 
@@ -783,9 +800,9 @@ function api(action, data, authOverride) {
 function $(id) { return document.getElementById(id); }
 var lastShown = null;
 function showRaw(id) {
-  ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invcount',
-   'view-invitem', 'view-invreview', 'view-txn', 'view-sales', 'view-trans', 'view-scan',
-   'view-item', 'view-exp'].forEach(function (v) {
+  ['view-connect', 'view-login', 'view-scope', 'view-mode', 'view-home', 'view-invhome',
+   'view-invcount', 'view-invitem', 'view-invreview', 'view-txn', 'view-sales', 'view-trans',
+   'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
   lastShown = id;
@@ -1204,26 +1221,118 @@ function sessSaved() {
   } catch (e) { return null; }
 }
 function showLogin() { setHeader(); show('view-login'); }
-function logout() { stopScan(false); INVSESSION = false; sessClear(); clearAuth(); $('lgPin').value = ''; showLogin(); }
+function logout() {
+  stopScan(false); INVSESSION = false; sessClear(); clearAuth();
+  ACCESS = null;
+  try { localStorage.removeItem('slt_access'); } catch (e) {}
+  $('lgPin').value = '';
+  showLogin();
+}
 
+/* personal login: email + PIN; access comes back from the Users tab */
+var ACCESS = null, PEND = null;
+function accessLoad() { try { ACCESS = JSON.parse(localStorage.getItem('slt_access')); } catch (e) {} }
+function accessSave() { try { localStorage.setItem('slt_access', JSON.stringify(ACCESS)); } catch (e) {} }
+function allowedStores() {
+  if (!ACCESS) return [];
+  if (ACCESS.some(function (r) { return r.store === ALL; })) return stores.concat([ALL]);
+  var out = [];
+  ACCESS.forEach(function (r) { if (out.indexOf(r.store) < 0) out.push(r.store); });
+  return out;
+}
+function allowedDepts(s) {
+  if (!ACCESS) return [];
+  var rel = (s === ALL)
+    ? ACCESS.filter(function (r) { return r.store === ALL; })
+    : ACCESS.filter(function (r) { return r.store === ALL || r.store === s; });
+  if (rel.some(function (r) { return r.depts === ALL; })) return departments.concat([ALL]);
+  var out = [];
+  rel.forEach(function (r) { (r.depts || []).forEach(function (d) { if (out.indexOf(d) < 0) out.push(d); }); });
+  return out;
+}
 function doLogin() {
-  var attempt = { store: $('lgStore').value, dept: $('lgDept').value, pin: $('lgPin').value.trim() };
-  if (!attempt.pin) { toast('Type your PIN', true); return; }
+  var email = $('lgEmail').value.trim();
+  var pinv = $('lgPin').value.trim();
+  if (!email || email.indexOf('@') < 0) { toast('Type your email address', true); return; }
+  if (!pinv) { toast('Type your PIN (or tap Forgot PIN)', true); return; }
   busy(true);
-  AUTH = attempt;
-  api('login').then(function () {
+  api('login2', { email: email, pin: pinv }).then(function (res) {
     busy(false);
-    saveAuth();
-    setHeader();
-    $('lgPin').value = '';
-    prefillDepts();
-    show('view-mode');
-    // first login on this device: download the item list before scanning starts
-    refreshCatalog(false, !CATALOG.list.length);
+    ACCESS = res.access || [];
+    accessSave();
+    PEND = { email: email, pin: pinv };
+    var sts = allowedStores();
+    if (sts.length === 1) {
+      var ds = allowedDepts(sts[0]);
+      if (ds.length === 1) { finishLogin(sts[0], ds[0]); return; }   // one place — no picking
+    }
+    paintScope();
+    show('view-scope');
   }).catch(function (err) {
     busy(false);
-    AUTH = null;
     toast((err && err.message) ? err.message : String(err), true);
+  });
+}
+function finishLogin(s, d) {
+  AUTH = { email: PEND.email, pin: PEND.pin, store: s, dept: d };
+  saveAuth();
+  setHeader();
+  $('lgPin').value = '';
+  prefillDepts();
+  show('view-mode');
+  refreshCatalog(false, !CATALOG.list.length);
+  toast('Logged in: ' + storeLabel(s) + ' · ' + deptLabel(d));
+}
+function paintScope() {
+  var st = $('scStore');
+  st.innerHTML = '';
+  allowedStores().forEach(function (s) {
+    var o = document.createElement('option');
+    o.value = s; o.textContent = storeLabel(s);
+    st.appendChild(o);
+  });
+  if (AUTH && AUTH.store) st.value = AUTH.store;
+  paintScopeDepts();
+}
+function paintScopeDepts() {
+  var dp = $('scDept');
+  dp.innerHTML = '';
+  allowedDepts($('scStore').value).forEach(function (d) {
+    var o = document.createElement('option');
+    o.value = d; o.textContent = deptLabel(d);
+    dp.appendChild(o);
+  });
+  if (AUTH && AUTH.dept) dp.value = AUTH.dept;
+}
+function scopeGo() { finishLogin($('scStore').value, $('scDept').value); }
+function switchScope() {
+  stopScan(false);
+  INVSESSION = false;
+  if (ACCESS && AUTH && AUTH.email) {
+    var sts = allowedStores();
+    var multi = sts.length > 1 || (sts.length === 1 && allowedDepts(sts[0]).length > 1);
+    if (multi) {
+      PEND = { email: AUTH.email, pin: AUTH.pin };
+      paintScope();
+      show('view-scope');
+      return;
+    }
+  }
+  logout();
+}
+function forgotPin() {
+  appPrompt('Type your email — a new PIN will be sent to it:', $('lgEmail').value.trim(), 'text', function (v) {
+    v = (v || '').trim();
+    if (!v || v.indexOf('@') < 0) { toast('That doesn\'t look like an email', true); return; }
+    $('lgEmail').value = v;
+    busy(true, 'Sending you a new PIN…');
+    api('pinReset', { email: v }).then(function () {
+      busy(false);
+      toast('If that email is on file, a new PIN is in its inbox now.');
+    }).catch(function (err) {
+      busy(false);
+      toast((err && err.message) || String(err), true);
+    });
   });
 }
 function prefillDepts() {
@@ -1234,20 +1343,6 @@ function prefillDepts() {
 function applyInit(init) {
   stores = init.stores;
   departments = init.departments;
-
-  var st = $('lgStore');
-  st.innerHTML = '';
-  stores.forEach(function (s) {
-    var o = document.createElement('option'); o.value = s; o.textContent = s; st.appendChild(o);
-  });
-  var oa = document.createElement('option'); oa.value = ALL; oa.textContent = 'All Stores (owner)'; st.appendChild(oa);
-
-  var lg = $('lgDept');
-  lg.innerHTML = '';
-  departments.forEach(function (d) {
-    var o = document.createElement('option'); o.value = d; o.textContent = d; lg.appendChild(o);
-  });
-  var ob = document.createElement('option'); ob.value = ALL; ob.textContent = 'All Departments (manager)'; lg.appendChild(ob);
 
   ['niDept', 'kiDept', 'ivDept'].forEach(function (id) {
     var sel = $(id);
@@ -1276,6 +1371,7 @@ window.onload = function () {
 
   loadApi();
   loadQueue();
+  accessLoad();
   try { INVAREA = localStorage.getItem('slt_invarea') || 'floor'; } catch (e) {}
   loadCatalog().then(function () {
   if (!API_URL) {
