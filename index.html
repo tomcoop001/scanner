@@ -132,7 +132,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v11</p>
+      <p class="catline">Charley Family Shop 'n Save · v12</p>
     </div>
   </div>
 
@@ -153,6 +153,14 @@
     <button class="bigbtn scanbtn" id="areaBack" onclick="enterArea('back')" style="background:#8a1610">&#128230; BACK ROOM
       <small style="font-weight:normal;font-size:14px;display:block">cases @ landed cost</small>
       <span id="subBack" style="display:none;font-size:14px;background:#fff;color:#1a7f37;border-radius:8px;padding:2px 10px;margin-top:4px">&#10003; SUBMITTED</span></button>
+    <div style="display:flex;gap:8px;margin:12px 0 0">
+      <button class="areabtn" onclick="openTxn('purchase')">&#128181; PURCHASES</button>
+      <button class="areabtn" onclick="openTxn('credit')">&#8617; CREDITS</button>
+    </div>
+    <div style="display:flex;gap:8px;margin:8px 0 0">
+      <button class="areabtn" onclick="openTrans()">&#128257; TRANSFERS</button>
+      <button class="areabtn" onclick="openSales()">&#128200; SALES</button>
+    </div>
     <button class="bigbtn save" onclick="finalizeInv()">&#128221; FINALIZE INVENTORY</button>
     <p class="catline" id="invtally"></p>
     <p class="catline" id="invlast"></p>
@@ -174,6 +182,71 @@
     <p class="catline" id="sesslast"></p>
     <button class="bigbtn save" onclick="submitArea()">&#10003; &nbsp;SUBMIT <span id="submitAreaName"></span></button>
     <button class="bigbtn cancel" onclick="exitArea()">&#8592; &nbsp;Back (finish this area later)</button>
+  </div>
+
+  <!-- PURCHASES / CREDITS ENTRY -->
+  <div id="view-txn" class="view">
+    <div class="card">
+      <p class="desc" id="txnTitle"></p>
+      <div id="txDeptWrap" style="display:none">
+        <label for="txDept">Department</label><select id="txDept"></select>
+      </div>
+      <label for="txVendor">Vendor</label>
+      <select id="txVendor" onchange="txVendorChange()"></select>
+      <label for="txDate">Invoice date</label>
+      <input type="date" id="txDate">
+      <label for="txNum">Invoice # (optional)</label>
+      <input type="text" id="txNum" inputmode="numeric" placeholder="Invoice number">
+      <label for="txAmt">Amount</label>
+      <input type="tel" id="txAmt" inputmode="decimal" placeholder="0.00"
+             style="font-size:24px;font-weight:bold;text-align:center"
+             onkeydown="if(event.key==='Enter'){saveTxnForm()}">
+      <button class="bigbtn save" onclick="saveTxnForm()">&#10003; &nbsp;SAVE &amp; NEXT</button>
+      <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Done here</button>
+    </div>
+    <div id="txList"></div>
+  </div>
+
+  <!-- WEEKLY SALES ENTRY -->
+  <div id="view-sales" class="view">
+    <div class="card">
+      <p class="desc">Weekly sales</p>
+      <div id="slDeptWrap" style="display:none">
+        <label for="slDept">Department</label><select id="slDept"></select>
+      </div>
+      <label for="slWeek">Week ending</label>
+      <input type="date" id="slWeek">
+      <label for="slAmt">Sales for that week</label>
+      <input type="tel" id="slAmt" inputmode="decimal" placeholder="0.00"
+             style="font-size:24px;font-weight:bold;text-align:center"
+             onkeydown="if(event.key==='Enter'){saveSaleForm()}">
+      <button class="bigbtn save" onclick="saveSaleForm()">&#10003; &nbsp;SAVE WEEK</button>
+      <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Done here</button>
+    </div>
+    <div id="slList"></div>
+  </div>
+
+  <!-- TRANSFERS -->
+  <div id="view-trans" class="view">
+    <div class="card">
+      <p class="desc">Send a transfer</p>
+      <div id="trDeptWrap" style="display:none">
+        <label for="trFromDept">From department</label><select id="trFromDept"></select>
+      </div>
+      <label for="trStore">To store</label>
+      <select id="trStore"></select>
+      <label for="trDept">To department</label>
+      <select id="trDept"></select>
+      <label for="trAmt">Amount (at cost)</label>
+      <input type="tel" id="trAmt" inputmode="decimal" placeholder="0.00"
+             style="font-size:24px;font-weight:bold;text-align:center">
+      <label for="trNote">Note (optional)</label>
+      <input type="text" id="trNote" placeholder="e.g. 2 cases provolone">
+      <button class="bigbtn save" onclick="sendTransferForm()">&#10003; &nbsp;SEND TRANSFER</button>
+      <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Back</button>
+    </div>
+    <div id="trIn"></div>
+    <div id="trOut"></div>
   </div>
 
   <!-- INVENTORY ITEM / QUANTITY -->
@@ -295,7 +368,7 @@ var ALL = 'ALL';
 /* ================= on-device item catalog (instant lookups) ============ */
 /* items + the case-UPC/order-code cross-reference live on the device in
    IndexedDB (roomier than localStorage — this data set is a few MB) */
-var CATALOG = { list: [], codes: [], map: null, codeMap: null, at: 0 };
+var CATALOG = { list: [], codes: [], vendors: [], map: null, codeMap: null, at: 0 };
 var CATALOG_MAX_AGE = 24 * 60 * 60 * 1000;  // re-download in background daily
 
 function idbOpen_() {
@@ -387,6 +460,7 @@ function loadCatalog() {
     if (obj) {
       CATALOG.list = obj.items || [];
       CATALOG.codes = obj.codes || [];
+      CATALOG.vendors = obj.vendors || [];
       CATALOG.at = obj.at || 0;
       buildMap();
     }
@@ -402,7 +476,7 @@ function loadCatalog() {
   }).then(updateCatLine);
 }
 function persistCatalog() {
-  idbSet_('catalog', { at: CATALOG.at, items: CATALOG.list, codes: CATALOG.codes }).catch(function () {});
+  idbSet_('catalog', { at: CATALOG.at, items: CATALOG.list, codes: CATALOG.codes, vendors: CATALOG.vendors }).catch(function () {});
   try { localStorage.removeItem('slt_items'); } catch (e) {}   // retire the old, smaller copy
 }
 function updateCatLine() {
@@ -421,6 +495,7 @@ function refreshCatalog(force, blocking) {
   api('items').then(function (res) {
     CATALOG.list = res.items || [];
     CATALOG.codes = res.codes || [];
+    CATALOG.vendors = res.vendors || [];
     CATALOG.at = Date.now();
     buildMap();
     persistCatalog();
@@ -611,7 +686,7 @@ function $(id) { return document.getElementById(id); }
 var lastShown = null;
 function showRaw(id) {
   ['view-connect', 'view-login', 'view-mode', 'view-home', 'view-invhome', 'view-invcount',
-   'view-invitem', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+   'view-invitem', 'view-txn', 'view-sales', 'view-trans', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
   lastShown = id;
@@ -1377,6 +1452,205 @@ function saveInv() {
   var ext = (v === '') ? '' : ' ($' + (Math.round(qty * v * 100) / 100).toFixed(2) + ')';
   toast('Counted ' + qty + (INVAREA === 'back' ? ' case(s)' : '') + ': ' + desc + ext);
   nextAfterItem();
+}
+
+/* ================= purchases / credits / sales / transfers ============= */
+var TXNTYPE = 'purchase';
+function fm(n) { return '$' + Number(n).toFixed(2); }
+function deptOrPicked(sel) {
+  if (AUTH && AUTH.dept !== ALL) return AUTH.dept;
+  return $(sel).value;
+}
+function fillDeptPicker(wrapId, selId) {
+  var need = AUTH && AUTH.dept === ALL;
+  $(wrapId).style.display = need ? 'block' : 'none';
+  if (need) {
+    var sel = $(selId);
+    sel.innerHTML = '<option value="">-- pick department --</option>';
+    departments.forEach(function (d) {
+      var o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o);
+    });
+  }
+}
+/* vendor dropdown: UNFI pinned on top (and the default), rest A-Z, plus add-new */
+function buildVendorSelect() {
+  var sel = $('txVendor');
+  sel.innerHTML = '';
+  var rest = [];
+  CATALOG.vendors.forEach(function (v) {
+    if (v.toUpperCase() !== 'UNFI' && rest.indexOf(v) < 0) rest.push(v);
+  });
+  rest.sort();
+  ['UNFI'].concat(rest).forEach(function (v) {
+    var o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+  });
+  var oNew = document.createElement('option');
+  oNew.value = '__new'; oNew.textContent = '+ Add a new vendor…';
+  sel.appendChild(oNew);
+  sel.value = 'UNFI';
+}
+function txVendorChange() {
+  if ($('txVendor').value !== '__new') return;
+  var name = prompt('New vendor name:');
+  name = (name || '').trim();
+  if (name) {
+    if (CATALOG.vendors.indexOf(name) < 0) { CATALOG.vendors.push(name); persistCatalog(); }
+    buildVendorSelect();
+    $('txVendor').value = name;
+  } else {
+    $('txVendor').value = 'UNFI';
+  }
+}
+function openTxn(type) {
+  TXNTYPE = type;
+  $('txnTitle').textContent = (type === 'credit') ? '↩ Credits' : '💵 Purchases';
+  fillDeptPicker('txDeptWrap', 'txDept');
+  buildVendorSelect();
+  $('txDate').value = iso(todayPlus(0));
+  $('txNum').value = '';
+  $('txAmt').value = '';
+  $('txList').innerHTML = '<p class="catline">Loading what\'s already entered…</p>';
+  show('view-txn');
+  api('txns').then(function (res) { renderTxnList(res); }).catch(function () {
+    $('txList').innerHTML = '<p class="catline">Couldn\'t load the list — entries still save fine.</p>';
+  });
+}
+function renderTxnList(res) {
+  var rows = (TXNTYPE === 'credit') ? res.credits : res.purchases;
+  var total = 0;
+  var h = '';
+  rows.forEach(function (t) { total += t.amount; });
+  h += '<div class="grp"><h3>' + (TXNTYPE === 'credit' ? 'Credits' : 'Purchases') +
+       ' this inventory (' + rows.length + ') — ' + fm(total) + '</h3>';
+  rows.slice().reverse().forEach(function (t) {
+    h += '<div class="exprow"><div class="d">' + escp(t.vendor) + ' — ' + fm(t.amount) + '</div>' +
+         '<div class="m">' + escp(t.when) + (t.invNum ? ' · inv #' + escp(t.invNum) : '') + '</div></div>';
+  });
+  h += '</div>';
+  $('txList').innerHTML = h;
+}
+function saveTxnForm() {
+  if (AUTH && AUTH.store === ALL) { toast("Log in under one store first.", true); return; }
+  var dept = deptOrPicked('txDept');
+  if (!dept) { toast('Pick a department', true); return; }
+  var amt = Number(String($('txAmt').value).replace(/[^0-9.]/g, ''));
+  if (!(amt > 0)) { toast('Type the amount', true); return; }
+  var vendor = $('txVendor').value;
+  if (!vendor || vendor === '__new') { toast('Pick a vendor', true); return; }
+  enqueue({ action: 'txn', data: { type: TXNTYPE, vendor: vendor, invDate: $('txDate').value,
+                                   invNum: $('txNum').value.trim(), amount: amt, department: dept } });
+  noteLast(fm(amt) + ' ' + vendor + ' ' + (TXNTYPE === 'credit' ? 'credit' : 'purchase'));
+  toast('Saved: ' + vendor + ' ' + fm(amt) + ' — enter the next one');
+  // optimistic: show it on the list right away, keep the form open for the next invoice
+  var list = $('txList');
+  list.innerHTML = '<div class="exprow"><div class="d">' + escp(vendor) + ' — ' + fm(amt) +
+                   '</div><div class="m">just now · syncing</div></div>' + list.innerHTML;
+  $('txNum').value = '';
+  $('txAmt').value = '';
+  $('txAmt').focus();
+}
+function openSales() {
+  fillDeptPicker('slDeptWrap', 'slDept');
+  $('slWeek').value = '';
+  $('slAmt').value = '';
+  $('slList').innerHTML = '<p class="catline">Loading…</p>';
+  show('view-sales');
+  api('txns').then(function (res) {
+    var h = '<div class="grp"><h3>Weeks entered (' + res.sales.length + ')</h3>';
+    var total = 0;
+    res.sales.forEach(function (s) {
+      total += s.amount;
+      h += '<div class="exprow"><div class="d">Week ending ' + escp(s.week) + ' — ' + fm(s.amount) + '</div></div>';
+    });
+    h += '<div class="exprow"><div class="d">Total sales: ' + fm(total) + '</div></div></div>';
+    $('slList').innerHTML = h;
+  }).catch(function () { $('slList').innerHTML = ''; });
+}
+function saveSaleForm() {
+  if (AUTH && AUTH.store === ALL) { toast("Log in under one store first.", true); return; }
+  var dept = deptOrPicked('slDept');
+  if (!dept) { toast('Pick a department', true); return; }
+  if (!$('slWeek').value) { toast('Pick the week-ending date', true); return; }
+  var amt = Number(String($('slAmt').value).replace(/[^0-9.]/g, ''));
+  if (!(amt > 0)) { toast('Type the sales amount', true); return; }
+  enqueue({ action: 'txn', data: { type: 'sale', weekEnding: $('slWeek').value, amount: amt, department: dept } });
+  toast('Week saved: ' + fm(amt));
+  $('slList').innerHTML = '<div class="exprow"><div class="d">Week ending ' + escp($('slWeek').value) +
+                          ' — ' + fm(amt) + ' (syncing)</div></div>' + $('slList').innerHTML;
+  $('slWeek').value = '';
+  $('slAmt').value = '';
+}
+function openTrans() {
+  fillDeptPicker('trDeptWrap', 'trFromDept');
+  var st = $('trStore');
+  st.innerHTML = '';
+  stores.forEach(function (s) {
+    var o = document.createElement('option'); o.value = s; o.textContent = s; st.appendChild(o);
+  });
+  // default to the first store that isn't yours
+  for (var i = 0; i < stores.length; i++) {
+    if (!AUTH || stores[i] !== AUTH.store) { st.value = stores[i]; break; }
+  }
+  var dp = $('trDept');
+  dp.innerHTML = '';
+  departments.forEach(function (d) {
+    var o = document.createElement('option'); o.value = d; o.textContent = d; dp.appendChild(o);
+  });
+  if (AUTH && AUTH.dept !== ALL) dp.value = AUTH.dept;
+  $('trAmt').value = '';
+  $('trNote').value = '';
+  $('trIn').innerHTML = '<p class="catline">Loading transfers…</p>';
+  $('trOut').innerHTML = '';
+  show('view-trans');
+  api('txns').then(function (res) { renderTransLists(res); }).catch(function () {
+    $('trIn').innerHTML = '<p class="catline">Couldn\'t load transfers — sending still works.</p>';
+  });
+}
+function renderTransLists(res) {
+  var h = '<div class="grp"><h3>Coming TO you (' + res.transfersIn.length + ')</h3>';
+  if (!res.transfersIn.length) h += '<div class="empty">Nothing pending.</div>';
+  res.transfersIn.forEach(function (t) {
+    h += '<div class="exprow" id="tr-' + escp(t.ref) + '"><div class="d">' + fm(t.amount) + ' from ' + escp(t.from) + '</div>' +
+         '<div class="m">' + escp(t.when) + (t.note ? ' · ' + escp(t.note) : '') + '</div>' +
+         (t.status === 'Confirmed'
+           ? '<div class="m" style="color:#1a7f37;font-weight:bold">✓ Confirmed</div>'
+           : '<div class="rowbtns"><button class="mk" onclick="confirmTransferRow(\'' + t.ref + '\')">&#128077; CONFIRM RECEIVED</button></div>') +
+         '</div>';
+  });
+  h += '</div>';
+  $('trIn').innerHTML = h;
+  var o = '<div class="grp"><h3>Sent BY you (' + res.transfersOut.length + ')</h3>';
+  res.transfersOut.forEach(function (t) {
+    o += '<div class="exprow"><div class="d">' + fm(t.amount) + ' to ' + escp(t.to) + '</div>' +
+         '<div class="m">' + escp(t.when) + ' · ' + escp(t.status) + (t.note ? ' · ' + escp(t.note) : '') + '</div></div>';
+  });
+  o += '</div>';
+  $('trOut').innerHTML = o;
+}
+function sendTransferForm() {
+  if (AUTH && AUTH.store === ALL) { toast("Log in under one store first.", true); return; }
+  var dept = deptOrPicked('trFromDept');
+  if (!dept) { toast('Pick your department', true); return; }
+  var amt = Number(String($('trAmt').value).replace(/[^0-9.]/g, ''));
+  if (!(amt > 0)) { toast('Type the amount', true); return; }
+  var toStore = $('trStore').value, toDept = $('trDept').value;
+  if (toStore === AUTH.store && toDept === dept) { toast('That points back at your own department', true); return; }
+  enqueue({ action: 'transfer', data: { toStore: toStore, toDept: toDept, amount: amt,
+                                        note: $('trNote').value.trim(), department: dept } });
+  toast('Transfer sent — ' + toStore + ' ' + toDept + ' will be notified');
+  $('trOut').innerHTML = '<div class="exprow"><div class="d">' + fm(amt) + ' to ' + escp(toStore + ' · ' + toDept) +
+                         '</div><div class="m">just now · syncing</div></div>' + $('trOut').innerHTML;
+  $('trAmt').value = '';
+  $('trNote').value = '';
+}
+function confirmTransferRow(ref) {
+  var row = $('tr-' + ref);
+  if (row) {
+    var btns = row.querySelector('.rowbtns');
+    if (btns) btns.outerHTML = '<div class="m" style="color:#1a7f37;font-weight:bold">✓ Confirmed</div>';
+  }
+  enqueue({ action: 'transferConfirm', data: { ref: ref } });
+  toast('Confirmed — it now counts in your department');
 }
 
 /* ================= expiring list ======================================= */
