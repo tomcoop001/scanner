@@ -144,7 +144,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v17</p>
+      <p class="catline">Charley Family Shop 'n Save · v18</p>
     </div>
   </div>
 
@@ -178,6 +178,7 @@
     <p class="catline" id="invtally"></p>
     <p class="catline" id="invlast"></p>
     <p class="catline"><button class="linklike" onclick="zeroTally()">zero this device's tally</button> &middot;
+       <button class="linklike" onclick="changeWho()">initials: <span id="wholine">not set</span></button> &middot;
        <button class="linklike" onclick="show('view-mode')">&#8644; switch program</button></p>
   </div>
 
@@ -276,6 +277,7 @@
       <span class="dept" id="iDept"></span>
       <div class="upcline" id="iCodeLine"></div>
       <p class="catline" id="iLbLine" style="display:none;text-align:left"></p>
+      <div id="iPrior"></div>
       <div id="iNewWrap" style="display:none">
         <label for="ivDept">Department</label>
         <select id="ivDept"></select>
@@ -381,6 +383,13 @@
 <div id="toast"></div>
 
 <script>
+/* ══════════════════════════════════════════════════════════════════════
+   PASTE YOUR APP LINK BELOW (the long Google address ending in /exec)
+   between the quotes, and every device connects automatically — nobody
+   ever sees the "paste your app link" screen again.
+   ══════════════════════════════════════════════════════════════════════ */
+var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbxQKPGDmNL4Zbqt7PI9skdrxawEgqUsBbo3IC5O78Rh_1Wjo-F9pCfypOE5K0MHOjA4/exec';
+
 var API_URL = null;       // your Apps Script /exec link (saved on this device)
 var AUTH = null;          // {store, dept, pin} for the logged-in user
 var stores = [];
@@ -914,6 +923,11 @@ function escp(s) {
 /* ================= one-time connect ==================================== */
 function loadApi() {
   try { API_URL = localStorage.getItem('slt_api') || null; } catch (e) {}
+  // the page carries its own link — new devices connect with zero setup
+  if (!API_URL && DEFAULT_API && DEFAULT_API.indexOf('https://') === 0 && DEFAULT_API.indexOf('/exec') > 0) {
+    API_URL = DEFAULT_API;
+    try { localStorage.setItem('slt_api', API_URL); } catch (e) {}
+  }
 }
 function doConnect() {
   var url = $('apiUrl').value.trim();
@@ -990,7 +1004,30 @@ function pickMode(m) {
   }
 }
 function areaName() { return INVAREA === 'back' ? 'BACK ROOM' : 'SALES FLOOR'; }
+/* who's holding this device — initials ride on every count so a manager and
+   an assistant can count the same department at the same time */
+function whoGet() {
+  try { return localStorage.getItem('slt_who') || ''; } catch (e) { return ''; }
+}
+function whoAsk(then) {
+  appPrompt('Your initials — they show on your counts so the team knows who counted what:',
+            whoGet(), 'text', function (v) {
+    v = (v || '').trim().slice(0, 8).toUpperCase();
+    if (v) { try { localStorage.setItem('slt_who', v); } catch (e) {} }
+    paintWho();
+    if (then) then();
+  }, then);
+}
+function changeWho() { whoAsk(function () { toast('Counting as ' + (whoGet() || 'no initials')); }); }
+function paintWho() {
+  var el = $('wholine');
+  if (el) el.textContent = whoGet() || 'not set';
+}
 function enterArea(a) {
+  if (!whoGet()) { whoAsk(function () { enterArea2_(a); }); return; }
+  enterArea2_(a);
+}
+function enterArea2_(a) {
   INVAREA = (a === 'back') ? 'back' : 'floor';
   INVSESSION = true;
   SESS = { n: 0, amt: 0 };
@@ -1032,6 +1069,7 @@ function paintInvMenu() {
   $('subFloor').style.display = s.f ? 'inline-block' : 'none';
   $('subBack').style.display = s.b ? 'inline-block' : 'none';
   updateTallyLine();
+  paintWho();
 }
 function updateSessLine() {
   $('sessline').textContent = 'This session: ' + SESS.n + ' count(s)' +
@@ -1048,7 +1086,7 @@ function openInvReview() {
       rows.slice().reverse().forEach(function (r) {
         h += '<div class="exprow"><div class="d">' + r.qty + ' × ' + escp(r.desc) +
              (r.ext === '' ? '' : ' — ' + fm(r.ext)) + '</div>' +
-             '<div class="m">' + escp(r.when) + '</div></div>';
+             '<div class="m">' + escp(r.when) + (r.by ? ' · by ' + escp(r.by) : '') + '</div></div>';
       });
       return h + '</div>';
     }
@@ -1240,7 +1278,11 @@ window.onload = function () {
   loadQueue();
   try { INVAREA = localStorage.getItem('slt_invarea') || 'floor'; } catch (e) {}
   loadCatalog().then(function () {
-  if (!API_URL) { show('view-connect'); return; }
+  if (!API_URL) {
+    if (DEFAULT_API) $('apiUrl').value = DEFAULT_API;
+    show('view-connect');
+    return;
+  }
 
   busy(true);
   api('init').then(function (init) {
@@ -1605,6 +1647,20 @@ function invLookup(upc) {
     $('ivDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
   }
   renderInvValue();
+  // has anyone (on any device) already counted this item this inventory?
+  $('iPrior').innerHTML = '';
+  if (current.found) {
+    var kNow = current.key;
+    api('invItem', { upc: kNow, department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+      if (!current || current.key !== kNow || !res.rows || !res.rows.length) return;
+      var tot = 0;
+      res.rows.forEach(function (r) { tot += Number(r.qty) || 0; });
+      var last = res.rows[res.rows.length - 1];
+      $('iPrior').innerHTML = '<div class="already">&#9888;&#65039; Already counted this inventory: <b>' + tot +
+        '</b> in ' + res.rows.length + ' scan(s) — last by <b>' + escp(last.by || 'someone') + '</b>, ' +
+        escp(last.when) + '. Add more ONLY if this is a different spot.</div>';
+    }).catch(function () {});
+  }
   show('view-invitem');
   setTimeout(function () { try { $('iQty').focus(); } catch (e) {} }, 60);
 }
@@ -1743,7 +1799,7 @@ function saveInv() {
   enqueue({ action: 'inv', data: {
     area: INVAREA, upc: current.key, codeScanned: current.code || '',
     description: desc, department: dept, qty: qty,
-    value: v === '' ? '' : v, isNew: isNew
+    value: v === '' ? '' : v, isNew: isNew, by: whoGet()
   } });
   bumpTally(v === '' ? 0 : qty * v);
   SESS.n++;
