@@ -63,6 +63,13 @@
              padding: 10px 12px; font-size: 15px; margin-bottom: 6px; }
 
   #reader { width: 100%; border-radius: 14px; overflow: hidden; background: #000; min-height: 300px; }
+  #camwrap { position: relative; width: 100%; border-radius: 14px; overflow: hidden; background: #000; }
+  #camvid { width: 100%; height: auto; display: block; max-height: 62vh; object-fit: contain; }
+  /* the band you aim with — it is exactly the strip the app reads */
+  #camband { position: absolute; left: 0; right: 0; top: 29%; height: 42%;
+             border-top: 3px solid rgba(200,32,24,.95); border-bottom: 3px solid rgba(200,32,24,.95);
+             box-shadow: 0 -400px 0 rgba(0,0,0,.42), 0 400px 0 rgba(0,0,0,.42); pointer-events: none; }
+  #camline { position: absolute; top: 50%; left: 4%; right: 4%; height: 2px; background: rgba(200,32,24,.75); }
   .hint { text-align: center; color: #666; font-size: 15px; margin-top: 10px; }
   .catline { text-align: center; color: #888; font-size: 13px; margin: 4px 0 0; }
   .linklike { background: none; border: none; color: #2557a7; text-decoration: underline; font-size: 13px; cursor: pointer; padding: 4px; }
@@ -146,7 +153,7 @@
       <p style="text-align:center;margin:4px 0 0">
         <button class="linklike" onclick="changeApi()">Change app link</button>
       </p>
-      <p class="catline">Charley Family Shop 'n Save · v21</p>
+      <p class="catline">Charley Family Shop 'n Save · v22</p>
     </div>
   </div>
 
@@ -214,6 +221,7 @@
       <button class="areabtn" onclick="openSales()">&#128200; SALES</button>
     </div>
     <button class="bigbtn expbtn" onclick="openInvReview()">&#129534; REVIEW COUNTS SO FAR</button>
+    <button class="bigbtn expbtn" onclick="openUnpriced()">&#128178; PRICE UNPRICED ITEMS</button>
     <button class="bigbtn save" onclick="finalizeInv()">&#128221; FINALIZE INVENTORY</button>
     <p class="catline" id="invtally"></p>
     <p class="catline" id="invlast"></p>
@@ -226,6 +234,7 @@
   <div id="view-invcount" class="view">
     <div class="card" style="padding:12px;text-align:center;font-size:18px;font-weight:bold" id="areaTitle"></div>
     <button class="bigbtn scanbtn" onclick="startScan()">&#128247; &nbsp;SCAN TO COUNT</button>
+    <button class="bigbtn expbtn" onclick="openSvc()">&#129472; &nbsp;SERVICE CASE — no barcode</button>
     <div class="card">
       <label for="iManual">Or type / scan-gun a UPC, case, or order code:</label>
       <input type="tel" id="iManual" placeholder="Any code" inputmode="numeric"
@@ -237,6 +246,34 @@
     <p class="catline"><button class="linklike" onclick="openInvReview()">&#129534; review all counts so far</button></p>
     <button class="bigbtn save" onclick="submitArea()">&#10003; &nbsp;SUBMIT <span id="submitAreaName"></span></button>
     <button class="bigbtn cancel" onclick="exitArea()">&#8592; &nbsp;Back (finish this area later)</button>
+  </div>
+
+  <!-- SERVICE CASE COUNTING (no barcodes: pick, count, next) -->
+  <div id="view-svc" class="view">
+    <div class="card">
+      <p class="desc">&#129472; Service case</p>
+      <div id="svDeptWrap" style="display:none">
+        <label for="svDept">Department</label><select id="svDept" onchange="paintSvcCats()"></select>
+      </div>
+      <label for="svCat">Category</label>
+      <select id="svCat" onchange="paintSvcItems()"></select>
+      <label for="svItem">Brand &amp; item</label>
+      <select id="svItem" onchange="svItemChange()"></select>
+      <div class="vline" id="svValue"></div>
+      <label for="svQty" id="svQtyLabel">Quantity (lbs — decimals OK)</label>
+      <input type="tel" id="svQty" inputmode="decimal" placeholder="0"
+             style="font-size:26px;font-weight:bold;text-align:center"
+             onkeydown="if(event.key==='Enter'){saveSvc()}">
+      <button class="bigbtn save" onclick="saveSvc()">&#10003; &nbsp;SAVE &amp; NEXT</button>
+      <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Done with the case</button>
+    </div>
+    <p class="catline" id="svSess"></p>
+  </div>
+
+  <!-- PRICE THE UNPRICED (sit-down pricing after the count) -->
+  <div id="view-unpriced" class="view">
+    <div id="unpricedList"></div>
+    <button class="bigbtn cancel" onclick="goHome()">&#8592; &nbsp;Back</button>
   </div>
 
   <!-- INVENTORY REVIEW (everything logged so far) -->
@@ -354,6 +391,10 @@
 
   <!-- SCANNER -->
   <div id="view-scan" class="view">
+    <div id="camwrap" style="display:none">
+      <video id="camvid" playsinline autoplay muted></video>
+      <div id="camband"><div id="camline"></div></div>
+    </div>
     <div id="reader"></div>
     <div id="photoFallback" style="display:none">
       <div class="card" style="text-align:center">
@@ -362,7 +403,9 @@
         <button class="bigbtn scanbtn" style="margin:0" onclick="snapPhoto()">&#128248; SNAP A PHOTO OF THE BARCODE</button>
       </div>
     </div>
-    <p class="hint" id="scanhint">Point the camera at the barcode</p>
+    <p class="hint" id="scanhint">Line the barcode up inside the red band.<br>
+      <span style="font-size:13px;color:#666">Long case barcode? Turn the phone sideways so the whole stripe fits across.</span></p>
+    <p class="catline" id="scanmode" style="margin-top:2px"></p>
     <button class="bigbtn cancel" id="torchBtn" style="display:none;font-size:16px;padding:12px" onclick="toggleTorch()">&#128294; Flashlight</button>
     <button class="bigbtn cancel" onclick="stopScan(true)">Done</button>
   </div>
@@ -445,7 +488,7 @@ var ALL = 'ALL';
 /* ================= on-device item catalog (instant lookups) ============ */
 /* items + the case-UPC/order-code cross-reference live on the device in
    IndexedDB (roomier than localStorage — this data set is a few MB) */
-var CATALOG = { list: [], codes: [], vendors: [], map: null, codeMap: null, at: 0 };
+var CATALOG = { list: [], codes: [], vendors: [], svc: [], map: null, codeMap: null, at: 0 };
 var CATALOG_MAX_AGE = 24 * 60 * 60 * 1000;  // re-download in background daily
 
 function idbOpen_() {
@@ -494,7 +537,80 @@ function upcCandidates_(scanned) {
   var s = digits;
   if (s.length === 13 && s.charAt(0) === '0') s = s.substring(1);
   if (s.length === 12 && s.charAt(0) === '2') add(s.substring(0, 6) + '00000');
+  // long GS1-128 case barcodes: the (01) field hides the item's real number
+  var g = parseGS1_(scanned);
+  if (g && g.gtin) {
+    var t = g.gtin;
+    add(t);                                   // the full 14-digit case form
+    add(t.substring(0, 13));                  // without its check digit
+    var mid = t.substring(1, 13);             // drop the pack level + check digit
+    add(mid);                                 // = the item as the POS file stores it
+    var body = mid.substring(1), sum = 0;     // and with a retail check digit added,
+    for (var k = 0; k < 11; k++) sum += Number(body.charAt(k)) * (k % 2 === 0 ? 3 : 1);
+    add(body + String((10 - (sum % 10)) % 10));
+  }
   return list;
+}
+/* ===== long GS1-128 case barcodes (meat & catch-weight shippers) =========
+   One long stripe packs several fields, each tagged by a 2-4 digit code:
+   (01) the item's number   (320x) net weight in lb   (310x) weight in kg
+   (11)/(13) pack date      (15)/(17) sell-by / use-by date
+   (10) lot                 (21) serial
+   We pull out the item number, this case's exact weight, and any dates. */
+function parseGS1_(raw) {
+  var s = String(raw == null ? '' : raw);
+  if (s.slice(0, 3) === ']C1') s = s.slice(3);          // scanner prefix, if any
+  var GS = String.fromCharCode(29);                     // field separator, if any
+  if (!/^\d\d/.test(s) || s.replace(/[^0-9]/g, '').length < 16) return null;
+  var out = { gtin: '', base: '', lb: null, kg: null, packDate: '', useBy: '', lot: '', serial: '' };
+  var i = 0, any = false;
+  function d6(v) {                                      // '260716' -> '2026-07-16'
+    if (!/^\d{6}$/.test(v)) return '';
+    var y = 2000 + Number(v.slice(0, 2)), m = Number(v.slice(2, 4)), dd = Number(v.slice(4, 6));
+    if (m < 1 || m > 12 || dd > 31) return '';
+    if (dd === 0) dd = new Date(y, m, 0).getDate();     // '00' day = end of that month
+    return y + '-' + ('0' + m).slice(-2) + '-' + ('0' + dd).slice(-2);
+  }
+  function varlen() {                                   // runs to the separator or the end
+    var j = s.indexOf(GS, i);
+    var v = (j < 0) ? s.slice(i) : s.slice(i, j);
+    i = (j < 0) ? s.length : j;
+    return v;
+  }
+  while (i < s.length) {
+    while (s.charAt(i) === GS) i++;
+    if (i >= s.length) break;
+    var a2 = s.substr(i, 2), a4 = s.substr(i, 4);
+    if (a2 === '01' || a2 === '02') {
+      var gt = s.substr(i + 2, 14);
+      if (!/^\d{14}$/.test(gt)) break;
+      if (a2 === '01' || !out.gtin) out.gtin = gt;
+      i += 16; any = true;
+    } else if (a2 === '11' || a2 === '13') {
+      out.packDate = d6(s.substr(i + 2, 6)) || out.packDate; i += 8; any = true;
+    } else if (a2 === '15' || a2 === '17') {
+      out.useBy = out.useBy || d6(s.substr(i + 2, 6)); i += 8; any = true;
+    } else if (a2 === '10') { i += 2; out.lot = varlen(); any = true;
+    } else if (a2 === '21') { i += 2; out.serial = varlen(); any = true;
+    } else if (a2 === '30' || a2 === '37') { i += 2; varlen(); any = true;
+    } else if (/^3[0-6]\d\d$/.test(a4)) {               // weights & measures family
+      var v6 = s.substr(i + 4, 6);
+      if (!/^\d{6}$/.test(v6)) break;
+      var val = Number(v6) / Math.pow(10, Number(a4.charAt(3)));
+      if (a4.slice(0, 3) === '320') out.lb = val;       // net weight, pounds
+      else if (a4.slice(0, 3) === '310') out.kg = val;  // net weight, kilograms
+      i += 10; any = true;
+    } else break;                                        // unknown field — keep what we have
+  }
+  if (!out.gtin || !any) return null;
+  out.base = normUpc(out.gtin.substring(1, 13));         // the everyday item number
+  if (out.lb === null && out.kg !== null) out.lb = Math.round(out.kg * 2.20462 * 10) / 10;
+  return out;
+}
+function prettyIso_(iso) {
+  var p = String(iso).split('-');
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 /* read the price embedded in an in-store scale barcode ("2" system) */
 function scalePrice_(scanned) {
@@ -538,6 +654,7 @@ function loadCatalog() {
       CATALOG.list = obj.items || [];
       CATALOG.codes = obj.codes || [];
       CATALOG.vendors = obj.vendors || [];
+      CATALOG.svc = obj.svc || [];
       CATALOG.at = obj.at || 0;
       buildMap();
     }
@@ -553,7 +670,7 @@ function loadCatalog() {
   }).then(updateCatLine);
 }
 function persistCatalog() {
-  idbSet_('catalog', { at: CATALOG.at, items: CATALOG.list, codes: CATALOG.codes, vendors: CATALOG.vendors }).catch(function () {});
+  idbSet_('catalog', { at: CATALOG.at, items: CATALOG.list, codes: CATALOG.codes, vendors: CATALOG.vendors, svc: CATALOG.svc }).catch(function () {});
   try { localStorage.removeItem('slt_items'); } catch (e) {}   // retire the old, smaller copy
 }
 function updateCatLine() {
@@ -595,6 +712,7 @@ function refreshCatalog(force, blocking) {
     CATALOG.list = res.items || [];
     CATALOG.codes = res.codes || [];
     CATALOG.vendors = res.vendors || [];
+    CATALOG.svc = res.svc || [];
     CATALOG.at = Date.now();
     if (blocking) busyProg(1, 'Saving to this device…');
     buildMap();
@@ -824,8 +942,8 @@ function $(id) { return document.getElementById(id); }
 var lastShown = null;
 function showRaw(id) {
   ['view-connect', 'view-login', 'view-signup', 'view-scope', 'view-mode', 'view-home', 'view-invhome',
-   'view-invcount', 'view-invitem', 'view-invreview', 'view-txn', 'view-sales', 'view-trans',
-   'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
+   'view-invcount', 'view-invitem', 'view-invreview', 'view-svc', 'view-unpriced',
+   'view-txn', 'view-sales', 'view-trans', 'view-scan', 'view-item', 'view-exp'].forEach(function (v) {
     $(v).className = (v === id) ? 'view on' : 'view';
   });
   lastShown = id;
@@ -1309,6 +1427,9 @@ function finishLogin(s, d) {
   prefillDepts();
   show('view-mode');
   refreshCatalog(false, !CATALOG.list.length);
+  // iPhones need a barcode reader downloaded (Androids have one built in) —
+  // fetch it now, quietly, so the first scan of the day is instant
+  setTimeout(function () { getDetector_().catch(function () {}); }, 2000);
   toast('Logged in: ' + storeLabel(s) + ' · ' + deptLabel(d));
 }
 function paintScope() {
@@ -1493,41 +1614,218 @@ function beep() {
 
 var lastSavedUpc = '', lastSavedAt = 0, dupToastAt = 0;
 var torchOn = false;
+
+/* ══════════════════════════════════════════════════════════════════════
+   FAST SCANNING
+   The camera on any modern phone shoots 1920 pixels across. The old
+   scanning library threw almost all of them away — it shrank each frame
+   down to the size of the little box on screen (about 380 pixels) before
+   trying to read it. Android phones have barcode reading built into the
+   phone itself and could still cope; iPhones have to do the reading in
+   software and simply couldn't — that's why they crawled or missed.
+   Now we read every frame at the camera's FULL resolution, and iPhones
+   get a proper reader downloaded once (about 1 MB, then it's on the
+   device for good). Anything that goes wrong falls back to the old way.
+   ══════════════════════════════════════════════════════════════════════ */
+var BD_FORMATS = ['upc_a', 'upc_e', 'ean_13', 'ean_8', 'code_128', 'itf', 'code_39'];
+var DETECTOR = null;         // the barcode reader in use
+var DETECTOR_KIND = '';      // 'phone' (built in) or 'downloaded'
+var SCAN = null;             // live scan session
+var POLY_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@2.3.1/dist/iife/index.js';
+
+function loadScript_(src) {
+  return new Promise(function (res, rej) {
+    var s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = function () { res(); };
+    s.onerror = function () { rej(new Error('could not load ' + src)); };
+    document.head.appendChild(s);
+  });
+}
+/* Get a barcode reader: the one built into the phone if it has one
+   (Android), otherwise download one that runs in the browser (iPhone). */
+function getDetector_() {
+  if (DETECTOR) return Promise.resolve(DETECTOR);
+  function make(kind) {
+    var d = new window.BarcodeDetector({ formats: BD_FORMATS });
+    DETECTOR = d; DETECTOR_KIND = kind;
+    return d;
+  }
+  try {
+    if (typeof window.BarcodeDetector !== 'undefined') return Promise.resolve(make('phone'));
+  } catch (e) { /* fall through to the download */ }
+  return loadScript_(window.SLT_POLY_URL || POLY_URL).then(function () {
+    if (typeof window.BarcodeDetector === 'undefined') throw new Error('reader unavailable');
+    try {
+      if (window.BarcodeDetectionAPI && window.SLT_WASM_BASE) {
+        window.BarcodeDetectionAPI.setZXingModuleOverrides({
+          locateFile: function (path) { return window.SLT_WASM_BASE + path; }
+        });
+      }
+    } catch (e) {}
+    return make('downloaded');
+  });
+}
+/* Ask for the camera, preferring the phone's MAIN rear lens. iPhones
+   often hand back the ultra-wide lens, which cannot focus on something
+   held close — a big reason barcodes came out blurry and unreadable. */
+function openCamera_() {
+  var base = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+  function get(extra) {
+    var v = {}; for (var k in base) v[k] = base[k];
+    for (var k2 in extra) v[k2] = extra[k2];
+    return navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+  }
+  var saved = null;
+  try { saved = localStorage.getItem('slt_camid'); } catch (e) {}
+  var first = saved ? get({ deviceId: { exact: saved } }).catch(function () { return get({ facingMode: { ideal: 'environment' } }); })
+                    : get({ facingMode: { ideal: 'environment' } });
+  return first.then(function (stream) {
+    if (saved) return stream;
+    // labels only become readable once a camera is already open
+    if (!navigator.mediaDevices.enumerateDevices) return stream;
+    return navigator.mediaDevices.enumerateDevices().then(function (devs) {
+      var cams = devs.filter(function (d) { return d.kind === 'videoinput'; });
+      var cur = (stream.getVideoTracks()[0] || {}).getSettings ? stream.getVideoTracks()[0].getSettings().deviceId : null;
+      var best = pickRearCam_(cams);
+      if (!best || best === cur) {
+        if (cur) { try { localStorage.setItem('slt_camid', cur); } catch (e) {} }
+        return stream;
+      }
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      return get({ deviceId: { exact: best } }).then(function (s2) {
+        try { localStorage.setItem('slt_camid', best); } catch (e) {}
+        return s2;
+      }).catch(function () { return get({ facingMode: { ideal: 'environment' } }); });
+    }).catch(function () { return stream; });
+  });
+}
+function pickRearCam_(cams) {
+  var exact = null, good = null;
+  cams.forEach(function (c) {
+    var L = String(c.label || '').toLowerCase();
+    if (!L) return;
+    if (L === 'back camera') { exact = exact || c.deviceId; return; }         // iPhone main lens
+    if (/ultra|telephoto|depth|truedepth|front/.test(L)) return;              // never these
+    if (/back|rear|environment/.test(L)) good = good || c.deviceId;
+  });
+  return exact || good;
+}
 function toggleTorch() {
-  if (!scanner) return;
   torchOn = !torchOn;
-  scanner.applyVideoConstraints({ advanced: [{ torch: torchOn }] }).catch(function () {
+  var p;
+  if (SCAN && SCAN.track) p = SCAN.track.applyConstraints({ advanced: [{ torch: torchOn }] });
+  else if (scanner) p = scanner.applyVideoConstraints({ advanced: [{ torch: torchOn }] });
+  else return;
+  p.catch(function () {
     torchOn = false;
     toast('Flashlight not supported on this device', true);
   });
 }
+/* one confirmed read → beep, buzz, look it up */
+function scanHit_(text) {
+  var now = Date.now();
+  if (normUpc(text) === lastSavedUpc && (now - lastSavedAt) < 8000) {
+    if (now - dupToastAt > 1600) {
+      dupToastAt = now;
+      toast('That one\'s saved — move to the next item.');
+    }
+    return false;   // keep scanning
+  }
+  beep();
+  if (navigator.vibrate) navigator.vibrate(120);
+  stopScan(false);
+  lastEntry = 'camera';
+  lookup(text);
+  return true;
+}
+function scanModeLine_(txt) { var e = $('scanmode'); if (e) e.textContent = txt || ''; }
 
 function startScan() {
   show('view-scan');
   $('photoFallback').style.display = 'none';
-  $('reader').style.display = 'block';
   $('scanhint').style.display = 'block';
   torchOn = false;
+  var legacy = false;
+  try { legacy = location.search.indexOf('legacyscan=1') >= 0 || localStorage.getItem('slt_legacyscan') === '1'; } catch (e) {}
+  if (legacy || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { startScanLegacy(); return; }
+  $('reader').style.display = 'none';
+  $('camwrap').style.display = 'block';
+  scanModeLine_((!DETECTOR && typeof window.BarcodeDetector === 'undefined')
+    ? 'Getting the barcode reader ready — one time only…'
+    : 'Starting the camera…');
+  var vid = $('camvid');
+  var sess = SCAN = { stop: false, track: null, stream: null, busy: false };
+  Promise.all([openCamera_(), getDetector_()]).then(function (both) {
+    if (sess.stop) { both[0].getTracks().forEach(function (t) { t.stop(); }); return; }
+    var stream = both[0], det = both[1];
+    sess.stream = stream;
+    sess.track = stream.getVideoTracks()[0] || null;
+    // keep the picture sharp on whatever is closest — that's the barcode
+    if (sess.track && sess.track.applyConstraints) {
+      sess.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(function () {});
+    }
+    vid.srcObject = stream;
+    vid.setAttribute('playsinline', 'true');
+    return vid.play().catch(function () {}).then(function () {
+      if (sess.stop) return;
+      $('torchBtn').style.display = 'block';
+      var s = sess.track && sess.track.getSettings ? sess.track.getSettings() : {};
+      scanModeLine_((DETECTOR_KIND === 'phone' ? 'Fast scanning' : 'Fast scanning (downloaded reader)') +
+                    (s.width ? ' · ' + s.width + '×' + s.height : ''));
+      var cv = document.createElement('canvas');
+      var cx = cv.getContext('2d', { willReadFrequently: true });
+      var tick = function () {
+        if (sess.stop) return;
+        if (sess.busy || !vid.videoWidth) { setTimeout(tick, 60); return; }
+        sess.busy = true;
+        // THE POINT OF ALL THIS: read the middle band of the picture at the
+        // camera's own resolution — roughly 1920 pixels across instead of 380
+        var vw = vid.videoWidth, vh = vid.videoHeight;
+        var bandH = Math.max(120, Math.round(vh * 0.42));
+        var sy = Math.round((vh - bandH) / 2);
+        if (cv.width !== vw || cv.height !== bandH) { cv.width = vw; cv.height = bandH; }
+        cx.drawImage(vid, 0, sy, vw, bandH, 0, 0, vw, bandH);
+        det.detect(cv).then(function (codes) {
+          sess.busy = false;
+          if (sess.stop) return;
+          if (codes && codes.length) {
+            // a shelf can show several barcodes — take the one aimed at
+            var mid = vw / 2, best = codes[0], bd = Infinity;
+            codes.forEach(function (c) {
+              var b = c.boundingBox || {}, cxm = (b.x || 0) + (b.width || 0) / 2;
+              var d = Math.abs(cxm - mid);
+              if (d < bd) { bd = d; best = c; }
+            });
+            if (best.rawValue && scanHit_(best.rawValue)) return;
+          }
+          setTimeout(tick, 40);
+        }).catch(function () {
+          sess.busy = false;
+          if (!sess.stop) setTimeout(tick, 120);
+        });
+      };
+      tick();
+    });
+  }).catch(function (err) {
+    if (sess.stop) return;
+    SCAN = null;
+    $('camwrap').style.display = 'none';
+    // camera refused, or the reader couldn't be downloaded — old way instead
+    startScanLegacy();
+  });
+}
+/* the previous scanning engine, kept as a safety net */
+function startScanLegacy() {
+  $('camwrap').style.display = 'none';
+  $('reader').style.display = 'block';
+  scanModeLine_('Compatibility mode');
   scanner = new Html5Qrcode('reader');
-  var config = { fps: 10, qrbox: { width: 300, height: 160 }, formatsToSupport: FORMATS() };
+  var config = { fps: 10,
+                 qrbox: function (vw, vh) { return { width: Math.max(250, Math.min(Math.round(vw * 0.92), 520)), height: 170 }; },
+                 formatsToSupport: FORMATS(), disableFlip: true };
   scanner.start({ facingMode: 'environment' }, config,
-    function (text) {
-      // guard: right after saving an item, the camera reopens still pointed
-      // at the same shelf — don't ring up the same barcode twice by accident
-      var now = Date.now();
-      if (normUpc(text) === lastSavedUpc && (now - lastSavedAt) < 8000) {
-        if (now - dupToastAt > 1600) {
-          dupToastAt = now;
-          toast('That one\'s saved — move to the next item.');
-        }
-        return;   // keep scanning
-      }
-      beep();
-      if (navigator.vibrate) navigator.vibrate(120);
-      stopScan(false);
-      lastEntry = 'camera';
-      lookup(text);
-    },
+    function (text) { scanHit_(text); },
     function () { /* no match in this frame — keep scanning */ }
   ).then(function () {
     $('torchBtn').style.display = 'block';   // camera is live — offer the light
@@ -1535,6 +1833,7 @@ function startScan() {
     scanner = null;
     $('reader').style.display = 'none';
     $('scanhint').style.display = 'none';
+    scanModeLine_('');
     $('photoFallback').style.display = 'block';
   });
 }
@@ -1544,22 +1843,43 @@ function photoPicked(inp) {
   var file = inp.files[0];
   inp.value = '';
   busy(true);
-  var fr = new Html5Qrcode('reader', { formatsToSupport: FORMATS(), verbose: false });
-  fr.scanFileV2(file, false).then(function (res) {
+  function legacyRead() {
+    var fr = new Html5Qrcode('reader', { formatsToSupport: FORMATS(), verbose: false });
+    return fr.scanFileV2(file, false).then(function (res) {
+      try { fr.clear(); } catch (e) {}
+      return res.decodedText;
+    }).catch(function (e) { try { fr.clear(); } catch (e2) {} throw e; });
+  }
+  // a photo is full resolution — read it with the fast reader when we have one
+  getDetector_().then(function (det) {
+    return createImageBitmap(file).then(function (bmp) {
+      return det.detect(bmp).then(function (codes) {
+        try { bmp.close(); } catch (e) {}
+        if (codes && codes.length && codes[0].rawValue) return codes[0].rawValue;
+        throw new Error('no barcode');
+      });
+    });
+  }).catch(legacyRead).then(function (text) {
     busy(false);
-    try { fr.clear(); } catch (e) {}
     beep();
     if (navigator.vibrate) navigator.vibrate(120);
     lastEntry = 'camera';
-    lookup(res.decodedText);
+    lookup(text);
   }).catch(function () {
     busy(false);
-    try { fr.clear(); } catch (e) {}
     toast('Could not read a barcode in that photo. Get closer so the barcode fills the shot, hold steady, and try again.', true);
   });
 }
 function stopScan(goBack) {
   $('torchBtn').style.display = 'none';
+  if (SCAN) {
+    SCAN.stop = true;
+    if (SCAN.stream) SCAN.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+    try { $('camvid').srcObject = null; } catch (e) {}
+    SCAN = null;
+  }
+  $('camwrap').style.display = 'none';
+  scanModeLine_('');
   if (scanner) {
     scanner.stop().then(function () { scanner.clear(); }).catch(function () {});
     scanner = null;
@@ -1589,12 +1909,14 @@ function cancelItem() { nextAfterItem(); }
 /* ================= lookup & date entry ================================= */
 function lookup(upc) {
   if (APPMODE === 'inv') { invLookup(upc); return; }
+  var g1 = parseGS1_(upc);
   // INSTANT path: the item list on this device
   if (CATALOG.map && CATALOG.list.length) {
     var hit = localFind(upc);
     if (hit) {
       showKnownItem({ scanned: String(upc), key: String(hit[0]), found: true,
                       description: String(hit[1]), department: String(hit[2] || ''), records: [] });
+      gs1DatePrefill_(g1);
       // quietly check for batches already being tracked (doesn't block anything)
       var keyNow = String(hit[0]);
       api('lookup', { upc: keyNow }).then(function (res) {
@@ -1603,7 +1925,10 @@ function lookup(upc) {
         }
       }).catch(function () {});
     } else {
-      showNewItem(String(upc));
+      // long case barcode: file the NEW item under its everyday number, so
+      // every other case of the same product matches from now on
+      showNewItem(g1 && g1.base ? g1.base : String(upc), String(upc));
+      gs1DatePrefill_(g1);
     }
     return;
   }
@@ -1611,9 +1936,17 @@ function lookup(upc) {
   busy(true);
   api('lookup', { upc: upc }).then(function (res) {
     busy(false);
-    if (res.found) showKnownItem(res); else showNewItem(res.key || res.scanned);
+    if (res.found) showKnownItem(res); else showNewItem(res.key || res.scanned, res.scanned);
+    gs1DatePrefill_(g1);
     if (res.records && res.records.length) renderRecords(res.records);
   }).catch(fail);
+}
+/* a use-by / sell-by date printed into the case barcode fills the calendar */
+function gs1DatePrefill_(g1) {
+  if (!g1 || !g1.useBy) return;
+  $('expDate').value = g1.useBy;
+  dateTyped();
+  toast('Date read from the case barcode — make sure it matches the product');
 }
 function showKnownItem(res) {
   $('manual').value = '';
@@ -1630,9 +1963,9 @@ function showKnownItem(res) {
   $('itRecords').innerHTML = '';
   show('view-item');
 }
-function showNewItem(upc) {
+function showNewItem(upc, scannedRaw) {
   $('manual').value = '';
-  current = { scanned: String(upc), key: normUpc(upc) || String(upc), found: false, description: '', department: '' };
+  current = { scanned: String(scannedRaw || upc), key: normUpc(upc) || String(upc), found: false, description: '', department: '' };
   resetDate();
   $('knownItem').style.display = 'none';
   $('newItem').style.display = 'block';
@@ -1769,6 +2102,7 @@ function invLookup(upc) {
     return;
   }
   savedAtGuard = 0;
+  var g1 = parseGS1_(upc);
   var hit = localFindFull(upc);
   $('iQty').value = '';
   $('iNewWrap').style.display = 'none';
@@ -1776,7 +2110,7 @@ function invLookup(upc) {
     current = { inv: true, found: true, key: String(hit.item[0]), scanned: String(upc),
                 description: String(hit.item[1]), department: String(hit.item[2] || ''),
                 retail: hit.item[3], code: hit.code, cost: hit.cost,
-                bylb: bylbFor(hit.item), scalePkg: false };
+                bylb: bylbFor(hit.item), scalePkg: false, gs: g1, catchWt: false };
     // scale-code package: the price printed into the barcode wins, and it's
     // a PACKAGE price — count packages, not pounds, on these scans
     var sp = scalePrice_(upc);
@@ -1789,15 +2123,29 @@ function invLookup(upc) {
     $('iCodeLine').textContent = hit.code ? ('Case/order code ' + hit.code + ' → item ' + current.key)
                                           : ('UPC: ' + current.key);
   } else {
-    current = { inv: true, found: false, key: normUpc(upc) || String(upc), scanned: String(upc),
+    var kk = (g1 && g1.base) ? g1.base : (normUpc(upc) || String(upc));
+    current = { inv: true, found: false, key: kk, scanned: String(upc),
                 description: '', department: '', retail: '', code: null, cost: null,
-                bylb: false, scalePkg: false };
+                bylb: false, scalePkg: false, gs: g1, catchWt: false };
     $('iDesc').textContent = 'Item not on file';
     $('iDept').textContent = 'new item';
     $('iCodeLine').textContent = 'Code: ' + current.key;
     $('iNewWrap').style.display = 'block';
     $('ivDesc').value = '';
     $('ivDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
+  }
+  // catch-weight case (long GS1 barcode): this case's exact weight came off
+  // the label, so the count is POUNDS and the back-room cost is per lb
+  if (g1 && g1.lb) {
+    current.catchWt = true;
+    if (!current.code) {
+      current.code = normUpc(current.key) || String(current.key);   // per-lb cost is filed under the item number
+      var ce = CATALOG.codeMap && CATALOG.codeMap[current.code];
+      if (ce && ce.c !== '' && (current.cost === '' || current.cost === null || current.cost === undefined)) {
+        current.cost = ce.c;
+      }
+    }
+    if (INVAREA === 'back' || current.bylb) $('iQty').value = String(g1.lb);
   }
   renderInvValue();
   // has anyone (on any device) already counted this item this inventory?
@@ -1834,7 +2182,12 @@ function bylbFor(item) {
 function renderInvValue() {
   var v = invValue_();
   var edit = ' <span style="font-size:13px;text-decoration:underline;color:#2557a7">&#9998; tap to change</span>';
-  if (INVAREA === 'back') {
+  if (INVAREA === 'back' && current.catchWt) {
+    $('iValue').innerHTML = (v === '')
+      ? '<span style="color:#c82018">No cost per lb on file — tap here to add it</span>'
+      : 'Cost: ' + fm(v) + ' per lb' + edit;
+    $('iQtyLabel').textContent = 'POUNDS (weight — change if needed)';
+  } else if (INVAREA === 'back') {
     $('iValue').innerHTML = (v === '')
       ? '<span style="color:#c82018">No case cost on file — tap here to add it</span>'
       : 'Case cost: ' + fm(v) + edit;
@@ -1851,7 +2204,11 @@ function renderInvValue() {
     $('iQtyLabel').textContent = current.bylb ? 'How many POUNDS? (weight — decimals OK)' : 'How many (units on the floor)?';
   }
   var lb = $('iLbLine');
-  if (INVAREA === 'floor' && current.found && !current.scalePkg) {
+  if (current.catchWt && current.gs && current.gs.lb) {
+    lb.style.display = 'block';
+    lb.innerHTML = '&#9878;&#65039; This case: <b>' + current.gs.lb + ' lb</b> — read from the barcode' +
+      (current.gs.packDate ? ' &middot; packed ' + prettyIso_(current.gs.packDate) : '');
+  } else if (INVAREA === 'floor' && current.found && !current.scalePkg) {
     lb.style.display = 'block';
     lb.innerHTML = current.bylb
       ? '&#9878;&#65039; Sold by the LB &nbsp;<button class="linklike" onclick="toggleLb()">change to by-the-unit</button>'
@@ -1866,9 +2223,10 @@ function editValue() {
   if (!current || !current.inv) return;
   if (INVAREA === 'back') {
     if (!current.code) { toast('Scan the CASE or ORDER barcode to set a case cost', true); return; }
+    var perLb = !!current.catchWt;
     var curC = (current.cost === '' || current.cost === null || current.cost === undefined) ? '' : Number(current.cost).toFixed(2);
     var askC = function () {
-      appPrompt('Case cost ($):', curC, 'decimal', function (v) {
+      appPrompt(perLb ? 'Cost per POUND ($):' : 'Case cost ($):', curC, 'decimal', function (v) {
         var n = Number(String(v).replace(/[^0-9.]/g, ''));
         if (!(n > 0)) { toast('That doesn\'t look like an amount', true); return; }
         n = Math.round(n * 100) / 100;
@@ -1880,13 +2238,19 @@ function editValue() {
             if (normUpc(CATALOG.codes[i][0]) === current.code) { CATALOG.codes[i][2] = n; break; }
           }
           persistCatalog();
+        } else if (CATALOG.codeMap) {
+          // first cost for a catch-weight case item — remember it on this
+          // device right away, and file it in the shared list for everyone
+          CATALOG.codeMap[current.code] = { t: String(current.key), c: n };
+          CATALOG.codes.push([current.code, String(current.key), n]);
+          persistCatalog();
         }
-        enqueue({ action: 'priceSet', data: { code: current.code, cost: n } });
+        enqueue({ action: 'priceSet', data: { code: current.code, upc: normUpc(current.key), cost: n } });
         renderInvValue();
-        toast('Case cost saved for everyone: ' + fm(n));
+        toast((perLb ? 'Cost per lb' : 'Case cost') + ' saved for everyone: ' + fm(n));
       });
     };
-    if (curC !== '') appConfirm('Change this case cost for everyone?', askC); else askC();
+    if (curC !== '') appConfirm(perLb ? 'Change this per-lb cost for everyone?' : 'Change this case cost for everyone?', askC); else askC();
   } else {
     if (!current.found) { toast('Save the item first, then set its price on the next scan', true); return; }
     var curR = (current.retail === '' || current.retail === null || current.retail === undefined) ? '' : Number(current.retail).toFixed(2);
@@ -1960,8 +2324,191 @@ function saveInv() {
   updateSessLine();
   noteLast(qty + ' × ' + desc + ' (' + areaName() + ')');
   var ext = (v === '') ? '' : ' ($' + (Math.round(qty * v * 100) / 100).toFixed(2) + ')';
-  toast('Counted ' + qty + (INVAREA === 'back' ? ' case(s)' : '') + ': ' + desc + ext);
+  toast('Counted ' + qty + (INVAREA === 'back' ? (current.catchWt ? ' lb' : ' case(s)') : '') + ': ' + desc + ext);
   nextAfterItem();
+}
+
+/* ================= service case (no-barcode) counting ================== */
+var SVSEL = null;   // the currently selected service item row
+function svcDept_() {
+  return (AUTH && AUTH.dept !== ALL) ? AUTH.dept : $('svDept').value;
+}
+function svcRowsForDept_() {
+  var d = svcDept_();
+  return CATALOG.svc.filter(function (r) { return r[1] === d; });
+}
+function openSvc() {
+  savedAtGuard = 0;   // fresh context — the guard only applies within one entry
+  var need = AUTH && AUTH.dept === ALL;
+  $('svDeptWrap').style.display = need ? 'block' : 'none';
+  if (need) {
+    var sel = $('svDept');
+    sel.innerHTML = '';
+    departments.forEach(function (d) {
+      var o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o);
+    });
+  }
+  paintSvcCats();
+  $('svQty').value = '';
+  $('svSess').textContent = '';
+  show('view-svc');
+}
+function paintSvcCats() {
+  var cats = [];
+  svcRowsForDept_().forEach(function (r) {
+    if (cats.indexOf(r[2]) < 0) cats.push(r[2]);
+  });
+  cats.sort();
+  var sel = $('svCat');
+  var keep = sel.value;
+  sel.innerHTML = '';
+  cats.forEach(function (c) {
+    var o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+  });
+  var oNew = document.createElement('option');
+  oNew.value = '__newcat'; oNew.textContent = '+ New category…';
+  sel.appendChild(oNew);
+  if (keep && cats.indexOf(keep) >= 0) sel.value = keep;
+  paintSvcItems();
+}
+function paintSvcItems() {
+  var sel = $('svCat');
+  if (sel.value === '__newcat') {
+    appPrompt('New category name (e.g. Cheese):', '', 'text', function (v) {
+      v = (v || '').trim();
+      if (!v) { paintSvcCats(); return; }
+      var o = document.createElement('option'); o.value = v; o.textContent = v;
+      sel.insertBefore(o, sel.lastChild);
+      sel.value = v;
+      paintSvcItems();
+    }, function () { paintSvcCats(); });
+    return;
+  }
+  var cat = sel.value;
+  var rows = svcRowsForDept_().filter(function (r) { return r[2] === cat; });
+  rows.sort(function (a, b) {
+    return ((a[3] + ' ' + a[4]).toUpperCase() < (b[3] + ' ' + b[4]).toUpperCase()) ? -1 : 1;
+  });
+  var it = $('svItem');
+  it.innerHTML = '<option value="">-- pick the item --</option>';
+  rows.forEach(function (r) {
+    var o = document.createElement('option');
+    o.value = r[0];
+    o.textContent = (r[3] ? r[3] + ' — ' : '') + r[4];
+    it.appendChild(o);
+  });
+  var oNew = document.createElement('option');
+  oNew.value = '__new'; oNew.textContent = '+ Add a new item…';
+  it.appendChild(oNew);
+  SVSEL = null;
+  paintSvcValue();
+}
+function svItemChange() {
+  var v = $('svItem').value;
+  if (v === '__new') {
+    appPrompt('Brand (optional — OK to leave blank):', '', 'text', function (brand) {
+      appPrompt('Item name:', '', 'text', function (item) {
+        item = (item || '').trim();
+        if (!item) { $('svItem').value = ''; return; }
+        brand = (brand || '').trim();
+        var id = 'SVC' + Date.now() + Math.floor(Math.random() * 1000);
+        var row = [id, svcDept_(), $('svCat').value, brand, item, ''];
+        CATALOG.svc.push(row);
+        persistCatalog();
+        enqueue({ action: 'svcAdd', data: { id: id, dept: row[1], category: row[2], brand: brand, item: item } });
+        paintSvcItems();
+        $('svItem').value = id;
+        svItemChange();
+        toast('Added: ' + (brand ? brand + ' — ' : '') + item);
+      });
+    });
+    return;
+  }
+  SVSEL = null;
+  for (var i = 0; i < CATALOG.svc.length; i++) {
+    if (CATALOG.svc[i][0] === v) { SVSEL = CATALOG.svc[i]; break; }
+  }
+  paintSvcValue();
+  if (SVSEL) setTimeout(function () { try { $('svQty').focus(); } catch (e) {} }, 60);
+}
+function paintSvcValue() {
+  if (!SVSEL) { $('svValue').innerHTML = ''; return; }
+  var c = SVSEL[5];
+  $('svValue').innerHTML = (c === '' || c === null || isNaN(Number(c)) || c === undefined)
+    ? '<span style="color:#c82018">No cost on file yet — count it now, price it later</span>'
+    : 'Cost: ' + fm(Number(c)) + ' per lb';
+}
+function saveSvc() {
+  if (Date.now() - savedAtGuard < 800) return;
+  if (AUTH && AUTH.store === ALL) { toast("Log in under one store to count.", true); return; }
+  if (!SVSEL) { toast('Pick the item first', true); return; }
+  var qty = Number(String($('svQty').value).replace(',', '.'));
+  if (!(qty > 0)) { toast('Type the quantity', true); return; }
+  var desc = (SVSEL[3] ? SVSEL[3] + ' — ' : '') + SVSEL[4];
+  var cost = (SVSEL[5] === '' || SVSEL[5] === null || isNaN(Number(SVSEL[5]))) ? '' : Number(SVSEL[5]);
+  savedAtGuard = Date.now();
+  enqueue({ action: 'inv', data: {
+    area: INVAREA, upc: SVSEL[0], svc: true, codeScanned: '',
+    description: desc, department: svcDept_(), qty: qty,
+    value: cost, isNew: false, by: whoGet()
+  } });
+  bumpTally(cost === '' ? 0 : qty * cost);
+  SESS.n++;
+  if (cost !== '') SESS.amt += Math.round(qty * cost * 100) / 100;
+  updateSessLine();
+  noteLast(qty + ' × ' + desc + ' (' + areaName() + ')');
+  $('svSess').textContent = 'Just saved: ' + qty + ' × ' + desc + (cost === '' ? ' (unpriced)' : '');
+  toast('Counted ' + qty + ': ' + desc + (cost === '' ? ' — price it later' : ''));
+  // stay right here for the next item in the case
+  savedAtGuard = 0;
+  $('svItem').value = '';
+  SVSEL = null;
+  paintSvcValue();
+  $('svQty').value = '';
+}
+
+/* ---- the sit-down pricing screen ---- */
+function openUnpriced() {
+  busy(true, 'Finding everything without a price…');
+  api('unpriced', { department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+    busy(false);
+    renderUnpriced(res.rows || []);
+    show('view-unpriced');
+  }).catch(fail);
+}
+function renderUnpriced(rows) {
+  var h = '<button class="bigbtn expbtn" style="font-size:16px;padding:12px;margin:0 0 4px" onclick="openUnpriced()">&#8635; Refresh</button>';
+  h += '<div class="grp"><h3>&#128178; Needs a price (' + rows.length + ' item' + (rows.length === 1 ? '' : 's') + ')</h3>';
+  if (!rows.length) h += '<div class="empty">&#127881; Everything counted has a price. You\'re done here.</div>';
+  rows.forEach(function (r, idx) {
+    h += '<div class="exprow" id="up-' + idx + '"><div class="d">' + escp(r.desc) + '</div>' +
+         '<div class="m">' + r.qty + ' counted · ' + escp(r.areas) + ' · ' + r.scans + ' scan(s)</div>' +
+         '<div class="rowbtns"><button class="mk" onclick="priceRow(' + idx + ')">&#128178; SET $ PER LB</button></div></div>';
+  });
+  h += '</div>';
+  $('unpricedList').innerHTML = h;
+  window.UNP = rows;
+}
+function priceRow(idx) {
+  var r = window.UNP && window.UNP[idx];
+  if (!r) return;
+  appPrompt('Cost per lb for:<br>' + escp(r.desc) + '<br><span style="font-weight:normal;font-size:17px">(' + r.qty + ' counted — it will price every scan of it)</span>', '', 'decimal', function (v) {
+    var n = Number(String(v).replace(/[^0-9.]/g, ''));
+    if (!(n > 0)) { toast('That doesn\'t look like an amount', true); return; }
+    n = Math.round(n * 100) / 100;
+    busy(true, 'Applying ' + fm(n) + ' to every count of it…');
+    api('svcPrice', { key: r.key, cost: n, department: (AUTH.dept !== ALL ? AUTH.dept : '') }).then(function (res) {
+      busy(false);
+      // remember locally too so the next count prices itself
+      for (var i = 0; i < CATALOG.svc.length; i++) {
+        if (CATALOG.svc[i][0] === r.key) { CATALOG.svc[i][5] = n; persistCatalog(); break; }
+      }
+      var row = $('up-' + idx);
+      if (row) row.parentNode.removeChild(row);
+      bumpTally(r.qty * n);
+      toast('Priced: ' + fm(n) + ' × ' + r.qty + ' = ' + fm(r.qty * n) + ' (' + (res.updated || 0) + ' count(s) updated)');
+    }).catch(fail);
+  });
 }
 
 /* ================= purchases / credits / sales / transfers ============= */
