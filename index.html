@@ -420,9 +420,24 @@
       <p class="desc" id="iDesc"></p>
       <span class="dept" id="iDept"></span>
       <div class="upcline" id="iCodeLine"></div>
+      <p class="catline" id="iTagLine" style="display:none;text-align:left"></p>
       <p class="catline" id="iLbLine" style="display:none;text-align:left"></p>
       <div id="iPrior"></div>
       <div id="iNewWrap" style="display:none">
+        <div style="border:2px solid #2557a7;border-radius:10px;padding:12px;margin:10px 0">
+          <p class="catline" style="text-align:left;margin:0 0 8px;color:#1c1c1c">
+            Is this the <b>case or order code</b> for something we already sell?
+            Tie it to that item once and this code opens it at every store, for good.</p>
+          <button class="bigbtn scanbtn" style="font-size:18px;padding:14px;margin:0 0 6px"
+                  onclick="linkScanStart_('iLinkQ','iLinkResults')">&#128247; &nbsp;SCAN THE PRODUCT'S BARCODE</button>
+          <p class="catline" style="text-align:left;margin:0 0 6px">No package handy? Find it by name:</p>
+          <input type="text" id="iLinkQ" placeholder="Part of the name &mdash; e.g. fajita"
+                 onkeydown="if(event.key==='Enter'){linkSearch_('iLinkQ','iLinkResults')}">
+          <button class="bigbtn expbtn" style="font-size:17px;padding:12px;margin:0"
+                  onclick="linkSearch_('iLinkQ','iLinkResults')">&#128279; &nbsp;LINK IT TO AN ITEM WE HAVE</button>
+          <div id="iLinkResults"></div>
+        </div>
+        <p class="catline" style="text-align:left;margin:14px 0 2px">Or add it as a brand-new item:</p>
         <label for="ivDept">Department</label>
         <select id="ivDept"></select>
         <label for="ivDesc">Brief description</label>
@@ -496,6 +511,20 @@
       <div id="newItem" style="display:none">
         <p class="desc" style="color:#c82018">Item not on file</p>
         <div class="upcline">UPC: <span id="niUpc"></span></div>
+        <div style="border:2px solid #2557a7;border-radius:10px;padding:12px;margin:10px 0">
+          <p class="catline" style="text-align:left;margin:0 0 8px;color:#1c1c1c">
+            Is this the <b>case or order code</b> for something we already sell?
+            Tie it to that item once and this code opens it at every store, for good.</p>
+          <button class="bigbtn scanbtn" style="font-size:18px;padding:14px;margin:0 0 6px"
+                  onclick="linkScanStart_('nLinkQ','nLinkResults')">&#128247; &nbsp;SCAN THE PRODUCT'S BARCODE</button>
+          <p class="catline" style="text-align:left;margin:0 0 6px">No package handy? Find it by name:</p>
+          <input type="text" id="nLinkQ" placeholder="Part of the name &mdash; e.g. fajita"
+                 onkeydown="if(event.key==='Enter'){linkSearch_('nLinkQ','nLinkResults')}">
+          <button class="bigbtn expbtn" style="font-size:17px;padding:12px;margin:0"
+                  onclick="linkSearch_('nLinkQ','nLinkResults')">&#128279; &nbsp;LINK IT TO AN ITEM WE HAVE</button>
+          <div id="nLinkResults"></div>
+        </div>
+        <p class="catline" style="text-align:left;margin:14px 0 2px">Or add it as a brand-new item:</p>
         <label for="niDept">Department</label>
         <select id="niDept"></select>
         <label for="niDesc">Brief description</label>
@@ -575,6 +604,7 @@ var ALL = 'ALL';
 /* items + the case-UPC/order-code cross-reference live on the device in
    IndexedDB (roomier than localStorage — this data set is a few MB) */
 var CATALOG = { list: [], codes: [], vendors: [], svc: [], map: null, codeMap: null, at: 0 };
+var LOCALEDITS = [];   // what this device has changed lately (see applyPendingToCatalog_)
 var CATALOG_MAX_AGE = 24 * 60 * 60 * 1000;  // re-download in background daily
 
 function idbOpen_() {
@@ -698,15 +728,42 @@ function prettyIso_(iso) {
   return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
     .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-/* read the price embedded in an in-store scale barcode ("2" system) */
+/* The check digit the scale prints BETWEEN the item number and the price.
+   Weighting comes from the variable-measure UPC standard: the four price
+   digits are weighted 2-, 2-, 3, 5-, added up, multiplied by 3, and the
+   units digit of that is the check digit. */
+var PCW2_ = [0, 2, 4, 6, 8, 9, 1, 3, 5, 7];   // x2, tens digit taken off the units
+var PCW3_ = [0, 3, 6, 9, 2, 5, 8, 1, 4, 7];   // units digit of x3
+var PCW5_ = [0, 5, 9, 4, 8, 3, 7, 2, 6, 1];   // x5, tens digit taken off the result
+function priceCheck4_(p4) {
+  var d = String(p4);
+  if (!/^\d{4}$/.test(d)) return '';
+  var s = PCW2_[+d.charAt(0)] + PCW2_[+d.charAt(1)] + PCW3_[+d.charAt(2)] + PCW5_[+d.charAt(3)];
+  return String((s * 3) % 10);
+}
+/* Read the price embedded in an in-store scale barcode ("2" system).
+   The layout is  2 IIIII C PPPP X  — a five-digit item number, a check digit
+   FOR the price, then the price in cents, then the barcode's own check digit.
+   We used to read five digits starting at position 6, which swallowed that
+   price check digit and made every package read ten times high and then some:
+   the rib label 202404-5-1005-9 came back as $510.05 instead of $10.05. */
 function scalePrice_(scanned) {
   var d = String(scanned).replace(/\D/g, '');
   if (d.length === 13 && d.charAt(0) === '0') d = d.substring(1);
   if (d.length === 12 && d.charAt(0) === '2') {
-    var cents = Number(d.substring(6, 11));
+    var cents = Number(d.substring(7, 11));
     if (!isNaN(cents) && cents > 0) return Math.round(cents) / 100;
   }
   return null;
+}
+/* Does the barcode's own price check digit agree with the price we just read?
+   A clean scan agrees. A smudged or half-read tag usually doesn't, and when it
+   doesn't we say so on screen instead of quietly banking a wrong number. */
+function scalePriceSure_(scanned) {
+  var d = String(scanned).replace(/\D/g, '');
+  if (d.length === 13 && d.charAt(0) === '0') d = d.substring(1);
+  if (d.length !== 12 || d.charAt(0) !== '2') return false;
+  return priceCheck4_(d.substring(7, 11)) === d.charAt(6);
 }
 function expandUpcE_(digits) {
   var d = String(digits || '');
@@ -773,6 +830,7 @@ function refreshCatalog(force, blocking) {
   if (!API_URL || !AUTH || catRefreshing) return;
   if (!force && CATALOG.list.length && (Date.now() - CATALOG.at) < CATALOG_MAX_AGE) return;
   catRefreshing = true;
+  var startedAt = Date.now();      // anything changed after this beats the download
   var lastSize = 0, gotBytes = 0;
   try { lastSize = Number(localStorage.getItem('slt_catsize')) || 0; } catch (e) {}
   if (blocking) busy(true, 'Downloading the item list to this device…');
@@ -801,6 +859,13 @@ function refreshCatalog(force, blocking) {
     CATALOG.svc = res.svc || [];
     CATALOG.at = Date.now();
     if (blocking) busyProg(1, 'Saving to this device…');
+    applyPendingToCatalog_(startedAt);   // don't undo what this device just changed
+    // the service-case screen holds a reference INTO the old list
+    if (SVSEL) {
+      for (var sv = 0; sv < CATALOG.svc.length; sv++) {
+        if (CATALOG.svc[sv][0] === SVSEL[0]) { SVSEL = CATALOG.svc[sv]; break; }
+      }
+    }
     buildMap();
     persistCatalog();
     try { localStorage.setItem('slt_catsize', String(gotBytes)); } catch (e) {}
@@ -814,6 +879,63 @@ function refreshCatalog(force, blocking) {
     if (blocking) busy(false);
     if (force) toast('Could not update the item list: ' + ((err && err.message) || err), true);
   });
+}
+/* A refresh downloads whatever the sheet holds RIGHT NOW. Anything this
+   device has changed but hasn't managed to send yet is still sitting in the
+   queue, and a plain overwrite quietly undoes it — a piece weight set two
+   minutes ago, a code just linked, a price just typed, a new item added in
+   the back room with no signal. So after every download we replay whatever
+   is still waiting to be sent, on top. The unsent change wins, because it is
+   newer than anything the sheet could have told us.
+   A change that HAS been sent needs the same protection for a few seconds
+   longer: if the download was already in flight when the change landed on the
+   sheet, the reply we are holding is older than the change and would undo it
+   just the same. So we also replay anything changed while this download was
+   on the wire — that is what LOCALEDITS remembers. */
+function applyPendingToCatalog_(startedAt) {
+  var jobs = QUEUE.slice();
+  for (var e = 0; e < LOCALEDITS.length; e++) {
+    if (LOCALEDITS[e].at >= startedAt) jobs.push(LOCALEDITS[e]);
+  }
+  if (!jobs.length) return 0;
+  jobs.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });   // oldest first, last write wins
+  var n = 0, byItem = {}, byCode = {}, i;
+  for (i = 0; i < CATALOG.list.length; i++) byItem[normUpc(CATALOG.list[i][0])] = CATALOG.list[i];
+  for (i = 0; i < CATALOG.codes.length; i++) byCode[normUpc(CATALOG.codes[i][0])] = CATALOG.codes[i];
+  for (var q = 0; q < jobs.length; q++) {
+    var j = jobs[q], d = j && j.data;
+    if (!d) continue;
+    if (j.action === 'linkCode') {
+      var cr = byCode[normUpc(d.code)];
+      if (cr) { cr[1] = String(d.upc); }
+      else { cr = [String(d.code), String(d.upc), '']; CATALOG.codes.push(cr); byCode[normUpc(d.code)] = cr; }
+      n++;
+    } else if (j.action === 'priceSet') {
+      if (d.svcKey !== undefined && d.each !== undefined) {
+        for (var s = 0; s < CATALOG.svc.length; s++) {
+          if (CATALOG.svc[s][0] === d.svcKey) { CATALOG.svc[s][6] = d.each; n++; break; }
+        }
+      } else if (d.code !== undefined && d.cost !== undefined) {
+        var cc = byCode[normUpc(d.code)];
+        if (cc) { cc[2] = d.cost; }
+        else { cc = [String(d.code), String(d.upc || ''), d.cost]; CATALOG.codes.push(cc); byCode[normUpc(d.code)] = cc; }
+        n++;
+      } else if (d.upc !== undefined) {
+        var ir = byItem[normUpc(d.upc)];
+        if (ir) {
+          if (d.retail !== undefined) ir[3] = d.retail;
+          if (d.bylb !== undefined) ir[4] = d.bylb;
+          if (d.shelfDays !== undefined) ir[5] = d.shelfDays;
+          n++;
+        }
+      }
+    } else if ((j.action === 'inv' || j.action === 'save') && d.isNew && d.upc && !byItem[normUpc(d.upc)]) {
+      var row = [String(d.upc), String(d.description || ''), String(d.department || ''), '', ''];
+      CATALOG.list.push(row); byItem[normUpc(d.upc)] = row;
+      n++;
+    }
+  }
+  return n;
 }
 /* Instant local lookup — item barcodes first, then the case-UPC /
    order-code cross-reference, all with the same matching rules.
@@ -833,7 +955,7 @@ function localFindFull(scanned) {
   return null;
 }
 function localFind(scanned) {
-  var r = localFindFull(scanned);
+  var r = localFindFull(scanned) || shelfTagHit_(scanned);
   return r ? r.item : null;
 }
 
@@ -857,7 +979,13 @@ function persistQueue() {
 }
 function enqueue(job) {
   job.auth = AUTH;                 // records belong to whoever was logged in when scanned
+  job.at = Date.now();
   job.when = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  // a short memory of everything this device has changed, kept past the point
+  // where the job leaves the queue, so an item-list download that was already
+  // in flight can't roll the change back
+  LOCALEDITS.push({ action: job.action, data: job.data, at: job.at });
+  if (LOCALEDITS.length > 300) LOCALEDITS.splice(0, LOCALEDITS.length - 300);
   if (job.action === 'save' || job.action === 'inv') {
     // unique id per scan — if a dropped connection makes this retry, the
     // server recognizes the id and never records the same scan twice.
@@ -1128,7 +1256,16 @@ function appModal(msg, opts, onOk, onCancel2, onExtra) {
   }
   var inp = $('amInput');
   if (inp) {
-    setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) {} }, 60);
+    // Focus lands a moment after the box opens, and selecting the old value
+    // makes it easy to type over. But somebody quick off the mark has already
+    // started typing by then, and selecting THEIR text means the next key
+    // wipes what they typed. So only select if it's still the old value.
+    setTimeout(function () {
+      try {
+        inp.focus();
+        if (inp.value === String(opts.value || '')) inp.select();
+      } catch (e) {}
+    }, 60);
     inp.onkeydown = function (e) { if (e.key === 'Enter') $('amOk').click(); };
   }
   $('amOk').onclick = function () {
@@ -1933,6 +2070,15 @@ function codeLooksReal_(code) {
 /* one confirmed read → beep, buzz, look it up */
 function scanHit_(text) {
   var now = Date.now();
+  // waiting on the product barcode so we can link it to a case code: this read
+  // is the answer to a question, so the "already saved that" guard mustn't eat it
+  if (LINKWAIT) {
+    beep();
+    if (navigator.vibrate) navigator.vibrate(120);
+    stopScan(false);
+    linkScanned_(text);
+    return true;
+  }
   if (normUpc(text) === lastSavedUpc && (now - lastSavedAt) < 8000) {
     if (now - dupToastAt > 1600) {
       dupToastAt = now;
@@ -2008,10 +2154,13 @@ function startCam_(opts) {
   });
 }
 
+var SCANHINT_ = '';
 function startScan() {
   show('view-scan');
   $('photoFallback').style.display = 'none';
   $('scanhint').style.display = 'block';
+  if (!SCANHINT_) SCANHINT_ = $('scanhint').innerHTML;
+  if (!LINKWAIT) $('scanhint').innerHTML = SCANHINT_;   // link mode writes its own
   torchOn = false;
   var legacy = false;
   try { legacy = location.search.indexOf('legacyscan=1') >= 0 || localStorage.getItem('slt_legacyscan') === '1'; } catch (e) {}
@@ -2502,7 +2651,11 @@ function stopScan(goBack) {
     scanner.stop().then(function () { scanner.clear(); }).catch(function () {});
     scanner = null;
   }
-  if (goBack) show(homeView());
+  if (goBack) {
+    // backing out of a link scan returns to the item that started it
+    if (LINKWAIT) { var b = LINKWAIT.back; LINKWAIT = null; show(b); return; }
+    show(homeView());
+  }
 }
 /* One box does both jobs: type digits and it's a code, type letters and it
    searches the item list by name. For a torn barcode or an unmarked product,
@@ -2521,7 +2674,148 @@ function goOrSearch_(inputId, listId) {
 function manualGo() { goOrSearch_('manual', 'mResults'); }
 function invManualGo() { goOrSearch_('iManual', 'iResults'); }
 function clearResults_(listId) { var el = $(listId); if (el) el.innerHTML = ''; }
-function nameSearch_(text, inputId, listId) {
+/* The wholesaler's order-code labels print the 7-digit order code with a few
+   more digits after it — a pack or sequence number that changes case to case.
+   The order code itself IS on file (64,376 of them); the full printed number
+   never is. That's why 656230502629 came up empty when 6562305 was sitting
+   right there pointing at the fajitas.
+   So when a scan matches nothing, try its first seven digits. But never take
+   that silently: about one 12-digit barcode in two hundred lands on some
+   order code by chance, and a wrong item in a count is invisible once it's
+   saved. Show what we think it is and let a person say yes — and when they
+   do, file the WHOLE barcode, so that label is a direct hit from then on.
+   One tap, once per product, company-wide. */
+/* The wholesaler's SHELF TAGS carry a Code 128 barcode that isn't a UPC at
+   all. It reads: seven digits of order code, two digits saying which tag it
+   is (01 = the everyday shelf tag, 02 = a Price Drop tag), then the shelf
+   price in cents. The Beef Fajita tag reads 656230501699 — order code
+   6562305, regular tag, $6.99 — and the Price Drop tag hanging under it
+   reads 656230502629: same item, $6.29.
+   Read off four tags in the Pittsburgh Street store and checked against the
+   price file, which agreed on both regular tags to the penny. */
+function parseShelfTag_(scanned) {
+  var d = String(scanned || '').replace(/\D/g, '');
+  if (d.length < 12 || d.length > 14) return null;
+  if (d.charAt(0) === '0') return null;            // order codes never start with 0
+  var t = d.substring(7, 9);
+  if (t !== '01' && t !== '02') return null;
+  var cents = d.substring(9);
+  if (!/^\d{3,5}$/.test(cents)) return null;
+  return { order: d.substring(0, 7), promo: (t === '02'), price: Number(cents) / 100 };
+}
+/* the item a shelf tag points at, or null if that order code isn't on file */
+function shelfTagHit_(scanned) {
+  var t = parseShelfTag_(scanned);
+  if (!t) return null;
+  var e = CATALOG.codeMap && CATALOG.codeMap[t.order];
+  if (!e) return null;
+  var item = CATALOG.map && CATALOG.map[normUpc(e.t)];
+  if (!item) return null;
+  return { item: item, code: t.order, cost: e.c, tag: t };
+}
+var NOGUESS = false;
+function guessOrderCode_(scanned) {
+  if (NOGUESS) { NOGUESS = false; return null; }
+  var d = String(scanned || '').replace(/\D/g, '');
+  if (d.length === 13 && d.charAt(0) === '0') d = d.substring(1);
+  if (d.length < 8 || d.length > 14) return null;
+  if (d.charAt(0) === '0') return null;          // real order codes never start with 0
+  var seven = d.substring(0, 7);
+  var e = CATALOG.codeMap && CATALOG.codeMap[seven];
+  if (!e) return null;
+  var item = CATALOG.map && CATALOG.map[normUpc(e.t)];
+  if (!item) return null;
+  return { order: seven, item: item };
+}
+function askOrderCode_(scanned, g) {
+  show(homeView());                               // don't leave a dead camera behind the question
+  appConfirm('This looks like order code <b>' + escp(g.order) + '</b>:<br><br><b>' +
+    escp(String(g.item[1])) + '</b><br><br>Is that what you\'re holding?',
+    function () {
+      var code = normUpc(scanned) || String(scanned);
+      var key = String(g.item[0]);
+      if (CATALOG.codeMap) CATALOG.codeMap[code] = { t: key, c: '' };
+      CATALOG.codes.push([code, key, '']);
+      persistCatalog();
+      enqueue({ action: 'linkCode', data: { code: code, upc: key, by: whoGet() } });
+      toast('Got it — that barcode opens this item straight away from now on');
+      lookup(String(scanned));
+    },
+    function () { NOGUESS = true; lookup(String(scanned)); });
+}
+/* An unknown barcode is usually NOT a new product. Nine times in ten it's the
+   case or order code for something already on file, and the only thing on
+   offer used to be "add it as a new item" — which quietly splits one product
+   into two and throws the count off. This lets whoever is standing there tie
+   the code to the real item once, for every store, and keep going. */
+function linkSearch_(qId, listId) {
+  var raw = String($(qId).value || '').trim();
+  if (!raw) { toast('Type part of the item name, or the item\'s own UPC', true); return; }
+  if (!CATALOG.list.length) { toast('Item list is not on this device yet — tap Update item list', true); return; }
+  if (!/[A-Za-z]/.test(raw)) {
+    // they typed the item's number straight off the shelf tag
+    var dg = raw.replace(/\D/g, '');
+    var hit = dg ? localFindFull(dg) : null;
+    if (hit) { linkPick_(String(hit.item[0]), listId, qId); return; }
+    toast('No item on file with that number — try part of the name instead', true);
+    return;
+  }
+  nameSearch_(raw, qId, listId, 'linkPick_');
+}
+function linkPick_(key, listId, inputId) {
+  linkCommit_(key, { listId: listId, inputId: inputId });
+}
+/* The one place a link is actually made, whether the item was found by name
+   or by scanning the product itself. */
+function linkCommit_(key, opts) {
+  if (!current || current.found) return;
+  opts = opts || {};
+  var code = String(current.key);              // the stable form of what was scanned
+  var again = String(current.scanned || current.key);
+  var it = CATALOG.map && CATALOG.map[normUpc(key)];
+  var name = it ? String(it[1]) : String(key);
+  if (normUpc(code) === normUpc(key)) { toast('That IS this code — pick the item it belongs to', true); return; }
+  appConfirm('Link code <b>' + escp(code) + '</b> to:<br><br><b>' + escp(name) + '</b>' +
+             '<br><br>Scanning that code will bring up this item at every store from now on.',
+    function () {
+      if (opts.listId) clearResults_(opts.listId);
+      if (opts.inputId && $(opts.inputId)) $(opts.inputId).value = '';
+      // good on this device the instant they tap — the back room has no signal
+      if (CATALOG.codeMap) CATALOG.codeMap[normUpc(code)] = { t: String(key), c: '' };
+      CATALOG.codes.push([String(code), String(key), '']);
+      persistCatalog();
+      enqueue({ action: 'linkCode', data: { code: String(code), upc: String(key), by: whoGet() } });
+      toast('Linked — ' + name);
+      lookup(again);
+    }, function () { if (opts.back) show(opts.back); });
+}
+/* THE FAST WAY, and the one people will actually use: they're holding the
+   case with the order code AND the product that came out of it. Scan the
+   case, then scan the package — two triggers, no typing, no spelling a
+   register name like "JOHNSOUL FC BEEF FAJITAS" on a tablet keyboard. */
+var LINKWAIT = null;
+function linkScanStart_(qId, listId) {
+  if (!current || current.found) return;
+  LINKWAIT = { qId: qId, listId: listId,
+               back: (APPMODE === 'inv') ? 'view-invitem' : 'view-item' };
+  startScan();
+  $('scanhint').innerHTML = 'Now scan the barcode on the <b>product itself</b> &mdash;' +
+    ' the one on the package, not the case.<br>' +
+    '<span style="font-size:13px;color:#666">We\'ll tie that item to the code you just scanned.</span>';
+}
+/* a barcode read while we're waiting to link: it has to be an item we know */
+function linkScanned_(text) {
+  var w = LINKWAIT; LINKWAIT = null;
+  var hit = localFindFull(text);
+  if (!hit) {
+    show(w.back);
+    toast('That one isn\'t on file either — find it by name below, or add it as a new item.', true);
+    return;
+  }
+  show(w.back);
+  linkCommit_(String(hit.item[0]), { listId: w.listId, inputId: w.qId, back: w.back });
+}
+function nameSearch_(text, inputId, listId, pickFn) {
   if (!CATALOG.list.length) { toast('Item list is not on this device yet — tap Update item list', true); return; }
   var q = text.toUpperCase().replace(/\s+/g, ' ').trim();
   var words = q.split(' ');
@@ -2554,8 +2848,9 @@ function nameSearch_(text, inputId, listId) {
   var h = '<p class="catline" style="text-align:left;margin:8px 0 4px">' + hits.length +
           ' match' + (hits.length === 1 ? '' : 'es') + (hits.length > 25 ? ' — closest 25 shown' : '') +
           ' · tap the right one</p>';
+  var pick = pickFn || 'pickFound_';
   show.forEach(function (it) {
-    h += '<div class="exprow fixrow" onclick="pickFound_(\'' + escp(String(it[0])) + '\',\'' + listId + '\',\'' + inputId + '\')">' +
+    h += '<div class="exprow fixrow" onclick="' + pick + '(\'' + escp(String(it[0])) + '\',\'' + listId + '\',\'' + inputId + '\')">' +
          '<div class="d">' + escp(String(it[1])) + '</div>' +
          '<div class="m">' + escp(String(it[2] || 'no department')) + ' · ' + escp(String(it[0])) + '</div></div>';
   });
@@ -2593,6 +2888,8 @@ function lookup(upc) {
         }
       }).catch(function () {});
     } else {
+      var og2 = guessOrderCode_(upc);
+      if (og2) { askOrderCode_(upc, og2); return; }
       // long case barcode: file the NEW item under its everyday number, so
       // every other case of the same product matches from now on
       showNewItem(g1 && g1.base ? g1.base : String(upc), String(upc));
@@ -2817,6 +3114,8 @@ function showNewItem(upc, scannedRaw) {
   $('knownItem').style.display = 'none';
   $('newItem').style.display = 'block';
   $('niUpc').textContent = current.key;
+  $('nLinkQ').value = '';
+  clearResults_('nLinkResults');
   $('niDesc').value = '';
   $('niDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
   show('view-item');
@@ -2994,8 +3293,14 @@ function invLookup(upc) {
   savedAtGuard = 0;
   var g1 = parseGS1_(upc);
   var hit = localFindFull(upc);
+  var stag = null;
+  if (!hit) {                       // not a product barcode — is it a shelf tag?
+    var sh = shelfTagHit_(upc);
+    if (sh) { hit = sh; stag = sh.tag; }
+  }
   $('iQty').value = '';
   $('iNewWrap').style.display = 'none';
+  $('iTagLine').style.display = 'none';
   if (hit) {
     current = { inv: true, found: true, key: String(hit.item[0]), scanned: String(upc),
                 description: String(hit.item[1]), department: String(hit.item[2] || ''),
@@ -3007,12 +3312,27 @@ function invLookup(upc) {
     if (sp !== null && String(current.key).slice(-5) === '00000') {
       current.retail = sp;
       current.scalePkg = true;
+      current.priceSure = scalePriceSure_(upc);
     }
     $('iDesc').textContent = current.description;
     $('iDept').textContent = current.department || 'No department yet';
     $('iCodeLine').textContent = hit.code ? ('Case/order code ' + hit.code + ' → item ' + current.key)
                                           : ('UPC: ' + current.key);
+    // The tag on the shelf is what the store is actually selling this for, so
+    // it is what the count is worth — sale price included. The price file is
+    // left alone; a Price Drop is temporary, and a regular tag that disagrees
+    // is a discrepancy to show someone, not something to fix behind their back.
+    current.tag = stag;
+    if (stag) {
+      current.fileRetail = current.retail;
+      current.retail = stag.price;
+      current.tagPriced = true;
+      paintShelfTag_(stag);
+    }
   } else {
+    // before calling it a new item: is this a wholesaler order-code label?
+    var og = guessOrderCode_(upc);
+    if (og) { askOrderCode_(upc, og); return; }
     var kk = (g1 && g1.base) ? g1.base : (normUpc(upc) || String(upc));
     current = { inv: true, found: false, key: kk, scanned: String(upc),
                 description: '', department: '', retail: '', code: null, cost: null,
@@ -3021,6 +3341,8 @@ function invLookup(upc) {
     $('iDept').textContent = 'new item';
     $('iCodeLine').textContent = 'Code: ' + current.key;
     $('iNewWrap').style.display = 'block';
+    $('iLinkQ').value = '';
+    clearResults_('iLinkResults');
     $('ivDesc').value = '';
     $('ivDept').value = (AUTH && AUTH.dept !== ALL) ? AUTH.dept : '';
   }
@@ -3054,6 +3376,46 @@ function invLookup(upc) {
   }
   show('view-invitem');
   setTimeout(function () { try { $('iQty').focus(); } catch (e) {} }, 60);
+}
+/* What the shelf tag says about money. A Price Drop tag is a temporary sale
+   price, so it is shown and nothing more. A regular tag SHOULD agree with the
+   price file to the penny — when it doesn't, somebody is either ringing up
+   more than the shelf promises or less than it should, and that is worth a
+   line of red on the screen. */
+function paintShelfTag_(t) {
+  var el = $('iTagLine');
+  if (!el || !t) return;
+  el.style.display = 'block';
+  var v = current.fileRetail;
+  var onFile = (v === '' || v === null || v === undefined || isNaN(Number(v))) ? null : Number(v);
+  if (t.promo) {
+    el.innerHTML = '<span style="color:#1c6b2b">&#127991;&#65039; <b>PRICE DROP tag</b> &mdash; counting at the sale price' +
+      (onFile !== null ? '. Regular price is ' + fm(onFile) + ', and that is left alone.' : '.') + '</span>';
+  } else if (onFile === null) {
+    el.innerHTML = '<span style="color:#1c6b2b">&#127991;&#65039; Shelf tag ' + fm(t.price) +
+      ' &mdash; nothing was on file, so this is now the price.</span>';
+    fileFollowsTag_(t.price, '');
+  } else if (Math.abs(onFile - t.price) < 0.005) {
+    el.innerHTML = '<span style="color:#1c6b2b">&#127991;&#65039; Shelf tag ' + fm(t.price) + ' &mdash; agrees with the price file</span>';
+  } else {
+    // the shelf is what the store is charging, so the file follows it
+    el.innerHTML = '<span style="color:#c82018">&#127991;&#65039; <b>Shelf tag ' + fm(t.price) +
+      '</b> &mdash; the price file said ' + fm(onFile) + '. Updated to match the shelf.</span>';
+    fileFollowsTag_(t.price, onFile);
+  }
+}
+/* A regular tag disagreeing with the file means the file is behind, so the
+   file is brought to the shelf without stopping the count. Every one of these
+   lands on the Price Changes tab with the old value, who scanned it and when,
+   because tags do go stale and a stale one would otherwise push an old price
+   back with nobody the wiser. */
+function fileFollowsTag_(price, was) {
+  var key = current.key;
+  var entry = CATALOG.map && CATALOG.map[normUpc(key)];
+  if (entry) { entry[3] = price; persistCatalog(); }
+  current.fileRetail = price;
+  enqueue({ action: 'priceSet',
+            data: { upc: key, retail: price, from: was, src: 'tag', by: whoGet() } });
 }
 /* how many days this product keeps after the date printed on its case */
 function shelfDaysFor_(item) {
@@ -3100,9 +3462,18 @@ function renderInvValue() {
     $('iQtyLabel').textContent = 'How many CASES?';
   } else if (current.scalePkg) {
     // a wrapped scale package: its barcode carries this package's exact price
-    $('iValue').innerHTML = 'Package price: ' + fm(v) + ' (from the barcode)';
+    $('iValue').innerHTML = current.priceTyped
+      ? 'Package price: ' + fm(v) + ' (typed from the tag)' + edit
+      : current.priceSure
+        ? 'Package price: ' + fm(v) + ' (from the barcode)' + edit
+        : '<span style="color:#c82018">Package price: ' + fm(v) +
+          ' &mdash; that tag didn\'t scan clean. Check the price on the tag.</span>' + edit;
     $('iQtyLabel').textContent = 'How many packages at this exact price?';
     if (!$('iQty').value) $('iQty').value = '1';
+  } else if (current.tagPriced && INVAREA !== 'back') {
+    // counted at what the shelf says, because that's what it rings up at
+    $('iValue').innerHTML = (current.tag && current.tag.promo ? 'Sale price on the tag: ' : 'Shelf tag price: ') +
+      fm(v) + (current.bylb ? ' per lb' : ' each') + edit;
   } else {
     $('iValue').innerHTML = (v === '')
       ? '<span style="color:#c82018">No retail on file — tap here to add it</span>'
@@ -3127,6 +3498,26 @@ function renderInvValue() {
    writes back to the master pricing data for all stores */
 function editValue() {
   if (!current || !current.inv) return;
+  // A scale package's price belongs to THIS package, not to the item — so
+  // correcting it fixes this count and nothing else. No confirmation: the
+  // person is holding the tag, and they can read it better than we can.
+  // A price that came off a tag belongs to what's in front of them, not to the
+  // item file. Correcting it fixes this count; changing the company price is a
+  // separate, clearly-labelled button on the shelf-tag line.
+  if (current.scalePkg || (current.tagPriced && INVAREA !== 'back')) {
+    var curP = (current.retail === '' || current.retail === null || current.retail === undefined)
+      ? '' : Number(current.retail).toFixed(2);
+    appPrompt(current.scalePkg ? 'Total price printed on the tag ($):' : 'Price on the shelf tag ($):',
+              curP, 'decimal', function (v0) {
+      var n0 = Number(String(v0).replace(/[^0-9.]/g, ''));
+      if (!(n0 > 0)) { toast('That doesn\'t look like an amount', true); return; }
+      current.retail = Math.round(n0 * 100) / 100;
+      current.priceTyped = true;
+      current.priceSure = true;
+      renderInvValue();
+    });
+    return;
+  }
   if (INVAREA === 'back') {
     if (!current.code) { toast('Scan the CASE or ORDER barcode to set a case cost', true); return; }
     var perLb = !!current.catchWt;
