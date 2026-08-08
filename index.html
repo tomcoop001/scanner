@@ -487,7 +487,7 @@
       </div>
     </div>
     <p class="hint" id="scanhint">Line the barcode up inside the red band.<br>
-      <span style="font-size:13px;color:#666">Long case barcode? Turn the phone sideways so the whole stripe fits across.</span></p>
+      <span style="font-size:13px;color:#666">Long case barcodes read in any direction now &mdash; up-and-down ones too. Just get the whole stripe in the picture.</span></p>
     <p class="catline" id="scanmode" style="margin-top:2px"></p>
     <button class="bigbtn cancel" id="torchBtn" style="display:none;font-size:16px;padding:12px" onclick="toggleTorch()">&#128294; Flashlight</button>
     <button class="bigbtn cancel" onclick="stopScan(true)">Done</button>
@@ -2063,6 +2063,12 @@ function toggleTorch() {
 function codeLooksReal_(code) {
   var fmt = String((code && code.format) || '').toLowerCase();
   var v = String((code && code.rawValue) || '');
+  // Meat-case labels carry a SECOND barcode: the pallet serial, AI (00) — a
+  // 20-digit number unique to that one box, pointing at no item on earth.
+  // It's less dense than the real barcode, so it decodes FIRST, stops the
+  // scanner on "Item not on file", and the manager stands there retrying.
+  // Skip it and keep hunting for the barcode that means something.
+  if (/^00\d{18}$/.test(v.replace(/\D/g, '')) && !localFindFull(v)) return false;
   if (fmt !== 'itf') return true;
   if (v.length === 14) return true;
   return !!localFindFull(v);
@@ -2129,17 +2135,43 @@ function startCam_(opts) {
         if (sess.busy || !vid.videoWidth) { setTimeout(tick, 60); return; }
         sess.busy = true;
         // THE POINT OF ALL THIS: read the middle band of the picture at the
-        // camera's own resolution — roughly 1920 pixels across instead of 380
+        // camera's own resolution — roughly 1920 pixels across instead of 380.
+        //
+        // And read it BOTH WAYS. The long barcode on a meat case runs
+        // up-and-down the label, so a wide band slices it across the bars
+        // and it can never decode — that's why an iPhone sat there for two
+        // minutes until somebody happened to turn the phone sideways. The
+        // wide band goes first (shelf products, most scans); if it finds
+        // nothing worth keeping, a tall band tries the same frame, so an
+        // upright label reads with the phone held however it's held.
         var vw = vid.videoWidth, vh = vid.videoHeight;
-        var bandH = Math.max(120, Math.round(vh * (opts.bandFrac || 0.42)));
-        var sy = Math.round((vh - bandH) / 2);
-        if (cv.width !== vw || cv.height !== bandH) { cv.width = vw; cv.height = bandH; }
-        cx.drawImage(vid, 0, sy, vw, bandH, 0, 0, vw, bandH);
-        det.detect(cv).then(function (codes) {
+        var frac = opts.bandFrac || 0.42;
+        function drawWide() {
+          var bandH = Math.max(120, Math.round(vh * frac));
+          var sy = Math.round((vh - bandH) / 2);
+          if (cv.width !== vw || cv.height !== bandH) { cv.width = vw; cv.height = bandH; }
+          cx.drawImage(vid, 0, sy, vw, bandH, 0, 0, vw, bandH);
+        }
+        function drawTall() {
+          var bandW = Math.max(120, Math.round(vw * frac));
+          var sx = Math.round((vw - bandW) / 2);
+          if (cv.width !== bandW || cv.height !== vh) { cv.width = bandW; cv.height = vh; }
+          cx.drawImage(vid, sx, 0, bandW, vh, 0, 0, bandW, vh);
+        }
+        function finish(codes) {
           sess.busy = false;
           if (sess.stop) return;
-          if (codes && codes.length && opts.onCodes(codes, vw)) return;   // true = we're done
+          if (codes && codes.length && opts.onCodes(codes, cv.width)) return;   // true = we're done
           setTimeout(tick, opts.gap || 40);
+        }
+        drawWide();
+        det.detect(cv).then(function (codes) {
+          if (sess.stop) { sess.busy = false; return; }
+          // "worth keeping" = a code the caller won't just throw away — a
+          // pallet serial or half-seen case code doesn't stop the tall try
+          if (codes && codes.some(codeLooksReal_)) return finish(codes);
+          drawTall();
+          return det.detect(cv).then(finish, function () { finish([]); });
         }).catch(function () {
           sess.busy = false;
           if (!sess.stop) setTimeout(tick, 120);
@@ -4089,48 +4121,85 @@ function openExpiring() {
     busy(false);
     var el = $('expList');
     var h = '<button class="bigbtn expbtn" style="font-size:16px;padding:12px;margin:0 0 4px" onclick="openExpiring()">&#8635; Refresh list</button>';
-    if (!groups || groups.length === 0) {
-      h += '<div class="empty">&#127881; Nothing close to expiring right now.</div>';
-    } else {
-      groups.forEach(function (g) {
-        h += '<div class="grp"><h3>' + escp(g.label) + ' (' + g.items.length + ')</h3>';
-        g.items.forEach(function (it) {
-          var badge;
-          if (it.daysLeft < 0) badge = '<span class="badge b-red">EXPIRED</span>';
-          else if (it.daysLeft === 0) badge = '<span class="badge b-red">TODAY</span>';
-          else if (it.daysLeft <= 1) badge = '<span class="badge b-org">1 day</span>';
-          else badge = '<span class="badge b-org">' + it.daysLeft + ' days</span>';
-          if (it.status === 'Marked Down') badge += ' <span class="badge b-blu">Marked Down</span>';
-          h += '<div class="exprow" id="exprow-' + escp(it.id) + '"><div class="d">' + escp(it.description) + '</div>' +
-               '<div class="m">UPC ' + escp(it.upc) + ' &middot; expires ' + it.expDate +
-               ' &nbsp;<span id="expbadge-' + escp(it.id) + '">' + badge + '</span></div>' +
-               '<div class="rowbtns">' +
-               '<button class="mk" onclick="setStatus(\'' + it.id + '\',\'Marked Down\')">&#128178; Marked Down</button>' +
-               '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Pulled\')">&#128465; Pulled</button>' +
-               '</div></div>';
-        });
-        h += '</div>';
-      });
+    // Two jobs, kept apart: what to go mark down on the walk, and what was
+    // already marked down and has now run out of time.
+    var closeouts = [];
+    var due = [];
+    (groups || []).forEach(function (g) {
+      var keep = [];
+      g.items.forEach(function (it) { if (it.closeout) closeouts.push(it); else keep.push(it); });
+      if (keep.length) due.push({ label: g.label, items: keep });
+    });
+
+    function row(it, buttons, note) {
+      var badge;
+      if (it.daysLeft < 0) badge = '<span class="badge b-red">EXPIRED</span>';
+      else if (it.daysLeft === 0) badge = '<span class="badge b-red">TODAY</span>';
+      else if (it.daysLeft <= 1) badge = '<span class="badge b-org">1 day</span>';
+      else badge = '<span class="badge b-org">' + it.daysLeft + ' days</span>';
+      return '<div class="exprow" id="exprow-' + escp(it.id) + '"><div class="d">' + escp(it.description) + '</div>' +
+             '<div class="m">UPC ' + escp(it.upc) + ' &middot; expires ' + it.expDate + (note || '') +
+             ' &nbsp;<span id="expbadge-' + escp(it.id) + '">' + badge + '</span></div>' +
+             '<div class="rowbtns" id="exprowbtns-' + escp(it.id) + '">' + buttons + '</div></div>';
     }
+
+    if (!due.length && !closeouts.length) {
+      h += '<div class="empty">&#127881; Nothing close to expiring right now.</div>';
+    }
+    if (closeouts.length) {
+      h += '<div class="grp"><h3 style="color:#c82018">Marked down &amp; out of date &mdash; close these out (' +
+           closeouts.length + ')</h3>' +
+           '<p class="catline" style="text-align:left;margin:0 0 8px">Did it sell at the marked-down price, ' +
+           'or did it go out? Tap one and it comes off the list and out of the email for good.</p>';
+      closeouts.forEach(function (it) {
+        h += row(it,
+          '<button class="mk" onclick="setStatus(\'' + it.id + '\',\'Sold\')">&#10003; Sold</button>' +
+          '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Expired\')">&#128465; Expired</button>',
+          it.markedOn ? ' &middot; marked down ' + escp(it.markedOn) : '');
+      });
+      h += '</div>';
+    }
+    due.forEach(function (g) {
+      h += '<div class="grp"><h3>' + escp(g.label) + ' (' + g.items.length + ')</h3>';
+      g.items.forEach(function (it) {
+        h += row(it,
+          '<button class="mk" onclick="setStatus(\'' + it.id + '\',\'Marked Down\')">&#128178; Marked Down</button>' +
+          '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Sold\')">&#10003; Sold</button>' +
+          '<button class="pl" onclick="setStatus(\'' + it.id + '\',\'Expired\')">&#128465; Expired</button>');
+      });
+      h += '</div>';
+    });
     el.innerHTML = h;
     show('view-exp');
   }).catch(fail);
 }
-/* instant on screen; the sheet update syncs in the background like saves do */
+/* Instant on screen; the sheet update syncs in the background like saves do.
+   The line doesn't vanish out from under them — it turns into a receipt with
+   an undo, because tapping the wrong row on a moving tablet is easy and a
+   Sold or Expired that nobody meant is otherwise gone for good. */
+var STATUS_SAID_ = { 'Marked Down': 'Marked down', 'Sold': 'Sold', 'Expired': 'Expired', 'Pulled': 'Pulled' };
 function setStatus(id, status) {
-  var row = $('exprow-' + id);
-  if (row) {
-    if (status === 'Pulled') {
-      row.parentNode.removeChild(row);
-    } else {
-      var b = $('expbadge-' + id);
-      if (b && b.innerHTML.indexOf('Marked Down') < 0) {
-        b.innerHTML += ' <span class="badge b-blu">Marked Down</span>';
-      }
-    }
+  var btns = $('exprowbtns-' + id);
+  if (btns) {
+    btns.innerHTML = '<span style="color:#1c6b2b;font-weight:bold">&#10003; ' +
+      (STATUS_SAID_[status] || status) + '</span> ' +
+      '<button class="linklike" onclick="undoStatus(\'' + id + '\')">undo</button>';
   }
-  enqueue({ action: 'status', data: { id: id, status: status } });
-  toast(status === 'Pulled' ? 'Item pulled off the list' : 'Marked down ✓');
+  enqueue({ action: 'status', data: { id: id, status: status, by: whoGet() } });
+  toast(status === 'Marked Down'
+    ? 'Marked down — off the list until it expires'
+    : (STATUS_SAID_[status] || status) + ' — off the list for good');
+}
+function undoStatus(id) {
+  enqueue({ action: 'status', data: { id: id, status: 'Active', by: whoGet() } });
+  var btns = $('exprowbtns-' + id);
+  if (btns) {
+    btns.innerHTML =
+      '<button class="mk" onclick="setStatus(\'' + id + '\',\'Marked Down\')">&#128178; Marked Down</button>' +
+      '<button class="pl" onclick="setStatus(\'' + id + '\',\'Sold\')">&#10003; Sold</button>' +
+      '<button class="pl" onclick="setStatus(\'' + id + '\',\'Expired\')">&#128465; Expired</button>';
+  }
+  toast('Put back on the list');
 }
 </script>
 </body>
